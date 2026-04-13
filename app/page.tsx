@@ -1,63 +1,118 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
 
 export default function Home() {
+  const [activePage, setActivePage] = useState("dashboard");
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            Finance Pro — meu app de finanças pessoais.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="flex h-screen bg-gray-950 text-white">
+      
+      {/* SIDEBAR */}
+      <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
+        
+        {/* Logo */}
+        <div className="p-6 border-b border-gray-800">
+          <h1 className="text-xl font-bold text-white">Finance Pro</h1>
+          <p className="text-xs text-gray-400 mt-1">Gestão financeira pessoal</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Menu */}
+        <nav className="flex-1 p-4 space-y-1">
+          {[
+            { id: "dashboard", label: "Dashboard", emoji: "📊" },
+            { id: "transacoes", label: "Transações", emoji: "💳" },
+            { id: "investimentos", label: "Investimentos", emoji: "📈" },
+            { id: "importar", label: "Importar Dados", emoji: "📥" },
+            { id: "relatorios", label: "Relatórios", emoji: "📄" },
+          ].map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setActivePage(item.id)}
+              className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                activePage === item.id
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-400 hover:bg-gray-800 hover:text-white"
+              }`}
+            >
+              {item.emoji} {item.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Footer da sidebar */}
+        <div className="p-4 border-t border-gray-800">
+          <p className="text-xs text-gray-500">v1.0 — em construção</p>
+        </div>
+      </aside>
+
+      {/* ÁREA PRINCIPAL */}
+      <main className="flex-1 overflow-auto">
+        
+        {/* Header */}
+        <header className="bg-gray-900 border-b border-gray-800 px-8 py-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold capitalize">{activePage}</h2>
+          <span className="text-sm text-gray-400">Bem-vindo, Will</span>
+        </header>
+
+        {/* Conteúdo */}
+        <div className="p-8">
+
+          {activePage === "dashboard" && (
+            <div>
+              <h3 className="text-2xl font-bold mb-6">Visão Geral</h3>
+              <div className="grid grid-cols-3 gap-6">
+                {[
+                  { label: "Saldo Total", value: "R$ 0,00", color: "blue" },
+                  { label: "Gastos do Mês", value: "R$ 0,00", color: "red" },
+                  { label: "Investimentos", value: "R$ 0,00", color: "green" },
+                ].map((card) => (
+                  <div key={card.label} className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+                    <p className="text-sm text-gray-400">{card.label}</p>
+                    <p className="text-3xl font-bold mt-2">{card.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activePage === "transacoes" && (
+            <div>
+              <h3 className="text-2xl font-bold mb-6">Transações</h3>
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <p className="text-gray-400">Nenhuma transação ainda. Importe seus extratos.</p>
+              </div>
+            </div>
+          )}
+
+          {activePage === "investimentos" && (
+            <div>
+              <h3 className="text-2xl font-bold mb-6">Investimentos</h3>
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <p className="text-gray-400">Nenhum investimento ainda. Importe seus extratos.</p>
+              </div>
+            </div>
+          )}
+
+          {activePage === "importar" && (
+            <div>
+              <h3 className="text-2xl font-bold mb-6">Importar Dados</h3>
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center">
+                <p className="text-4xl mb-4">📥</p>
+                <p className="text-gray-400">Em breve: arraste PDFs, CSVs e prints aqui.</p>
+              </div>
+            </div>
+          )}
+
+          {activePage === "relatorios" && (
+            <div>
+              <h3 className="text-2xl font-bold mb-6">Relatórios</h3>
+              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <p className="text-gray-400">Em breve: relatórios mensais automáticos.</p>
+              </div>
+            </div>
+          )}
+
         </div>
       </main>
     </div>
