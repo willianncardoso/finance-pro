@@ -2,113 +2,263 @@
 
 import { useState } from "react";
 
+const md3 = {
+  background: "#0f0f13",
+  surface: "#1c1b1f",
+  surfaceContainer: "#211f26",
+  surfaceContainerHigh: "#2b2930",
+  primary: "#d0bcff",
+  primaryContainer: "#4f378b",
+  onPrimary: "#381e72",
+  secondary: "#ccc2dc",
+  tertiary: "#efb8c8",
+  error: "#f2b8b5",
+  outline: "#938f99",
+  onSurface: "#e6e1e5",
+  onSurfaceVariant: "#cac4d0",
+};
+
 export default function Home() {
   const [activePage, setActivePage] = useState("dashboard");
 
+  const navItems = [
+    { id: "dashboard", label: "Dashboard", icon: "📊" },
+    { id: "transacoes", label: "Transações", icon: "💳" },
+    { id: "investimentos", label: "Investimentos", icon: "📈" },
+    { id: "importar", label: "Importar Dados", icon: "📥" },
+    { id: "relatorios", label: "Relatórios", icon: "📄" },
+  ];
+
   return (
-    <div className="flex h-screen bg-gray-950 text-white">
-      
-      {/* SIDEBAR */}
-      <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
-        
-        {/* Logo */}
-        <div className="p-6 border-b border-gray-800">
-          <h1 className="text-xl font-bold text-white">Finance Pro</h1>
-          <p className="text-xs text-gray-400 mt-1">Gestão financeira pessoal</p>
+    <div style={{ display: "flex", height: "100vh", background: md3.background, color: md3.onSurface, fontFamily: "Inter, sans-serif" }}>
+
+      {/* NAVIGATION RAIL - MD3 */}
+      <aside style={{
+        width: "260px",
+        background: md3.surface,
+        display: "flex",
+        flexDirection: "column",
+        borderRight: `1px solid ${md3.surfaceContainerHigh}`,
+      }}>
+
+        {/* App name */}
+        <div style={{ padding: "28px 24px 20px", borderBottom: `1px solid ${md3.surfaceContainerHigh}` }}>
+          <div style={{ fontSize: "22px", fontWeight: 700, color: md3.primary, letterSpacing: "-0.3px" }}>
+            Finance Pro
+          </div>
+          <div style={{ fontSize: "12px", color: md3.onSurfaceVariant, marginTop: "4px", fontWeight: 400 }}>
+            Gestão financeira pessoal
+          </div>
         </div>
 
-        {/* Menu */}
-        <nav className="flex-1 p-4 space-y-1">
-          {[
-            { id: "dashboard", label: "Dashboard", emoji: "📊" },
-            { id: "transacoes", label: "Transações", emoji: "💳" },
-            { id: "investimentos", label: "Investimentos", emoji: "📈" },
-            { id: "importar", label: "Importar Dados", emoji: "📥" },
-            { id: "relatorios", label: "Relatórios", emoji: "📄" },
-          ].map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setActivePage(item.id)}
-              className={`w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
-                activePage === item.id
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-400 hover:bg-gray-800 hover:text-white"
-              }`}
-            >
-              {item.emoji} {item.label}
-            </button>
-          ))}
+        {/* Nav items */}
+        <nav style={{ flex: 1, padding: "12px 12px" }}>
+          {navItems.map((item) => {
+            const isActive = activePage === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActivePage(item.id)}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "16px",
+                  padding: "14px 16px",
+                  borderRadius: "28px",
+                  border: "none",
+                  cursor: "pointer",
+                  marginBottom: "4px",
+                  background: isActive ? md3.primaryContainer : "transparent",
+                  color: isActive ? md3.primary : md3.onSurfaceVariant,
+                  fontSize: "14px",
+                  fontWeight: isActive ? 600 : 400,
+                  fontFamily: "Inter, sans-serif",
+                  transition: "background 0.2s, color 0.2s",
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ fontSize: "18px" }}>{item.icon}</span>
+                {item.label}
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Footer da sidebar */}
-        <div className="p-4 border-t border-gray-800">
-          <p className="text-xs text-gray-500">v1.0 — em construção</p>
+        {/* Footer */}
+        <div style={{ padding: "16px 24px", borderTop: `1px solid ${md3.surfaceContainerHigh}` }}>
+          <div style={{ fontSize: "11px", color: md3.outline }}>v1.0 — em construção</div>
         </div>
       </aside>
 
-      {/* ÁREA PRINCIPAL */}
-      <main className="flex-1 overflow-auto">
-        
-        {/* Header */}
-        <header className="bg-gray-900 border-b border-gray-800 px-8 py-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold capitalize">{activePage}</h2>
-          <span className="text-sm text-gray-400">Bem-vindo, Will</span>
+      {/* MAIN AREA */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
+        {/* Top bar */}
+        <header style={{
+          background: md3.surface,
+          borderBottom: `1px solid ${md3.surfaceContainerHigh}`,
+          padding: "0 32px",
+          height: "64px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}>
+          <span style={{ fontSize: "22px", fontWeight: 600, color: md3.onSurface }}>
+            {navItems.find(i => i.id === activePage)?.label}
+          </span>
+          <div style={{
+            background: md3.primaryContainer,
+            color: md3.primary,
+            borderRadius: "20px",
+            padding: "6px 16px",
+            fontSize: "13px",
+            fontWeight: 500,
+          }}>
+            Olá, Will 👋
+          </div>
         </header>
 
-        {/* Conteúdo */}
-        <div className="p-8">
+        {/* Page content */}
+        <div style={{ flex: 1, overflow: "auto", padding: "32px" }}>
 
+          {/* DASHBOARD */}
           {activePage === "dashboard" && (
             <div>
-              <h3 className="text-2xl font-bold mb-6">Visão Geral</h3>
-              <div className="grid grid-cols-3 gap-6">
+              <p style={{ color: md3.onSurfaceVariant, marginBottom: "24px", fontSize: "14px" }}>
+                Resumo do seu patrimônio e movimentações
+              </p>
+
+              {/* Cards */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px", marginBottom: "32px" }}>
                 {[
-                  { label: "Saldo Total", value: "R$ 0,00", color: "blue" },
-                  { label: "Gastos do Mês", value: "R$ 0,00", color: "red" },
-                  { label: "Investimentos", value: "R$ 0,00", color: "green" },
+                  { label: "Saldo Total", value: "R$ 0,00", sub: "todas as contas", color: md3.primary },
+                  { label: "Gastos do Mês", value: "R$ 0,00", sub: "abril 2026", color: md3.error },
+                  { label: "Investimentos", value: "R$ 0,00", sub: "BTG + Avenue", color: md3.tertiary },
                 ].map((card) => (
-                  <div key={card.label} className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-                    <p className="text-sm text-gray-400">{card.label}</p>
-                    <p className="text-3xl font-bold mt-2">{card.value}</p>
+                  <div key={card.label} style={{
+                    background: md3.surfaceContainer,
+                    borderRadius: "16px",
+                    padding: "24px",
+                    border: `1px solid ${md3.surfaceContainerHigh}`,
+                  }}>
+                    <div style={{ fontSize: "13px", color: md3.onSurfaceVariant, marginBottom: "8px", fontWeight: 500 }}>
+                      {card.label}
+                    </div>
+                    <div style={{ fontSize: "28px", fontWeight: 700, color: card.color }}>
+                      {card.value}
+                    </div>
+                    <div style={{ fontSize: "11px", color: md3.outline, marginTop: "6px" }}>
+                      {card.sub}
+                    </div>
                   </div>
                 ))}
               </div>
+
+              {/* Placeholder gráfico */}
+              <div style={{
+                background: md3.surfaceContainer,
+                borderRadius: "16px",
+                padding: "24px",
+                border: `1px solid ${md3.surfaceContainerHigh}`,
+                minHeight: "200px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "column",
+                gap: "8px",
+              }}>
+                <span style={{ fontSize: "32px" }}>📊</span>
+                <span style={{ color: md3.onSurfaceVariant, fontSize: "14px" }}>
+                  Gráficos aparecerão aqui após importar dados
+                </span>
+              </div>
             </div>
           )}
 
+          {/* TRANSAÇÕES */}
           {activePage === "transacoes" && (
             <div>
-              <h3 className="text-2xl font-bold mb-6">Transações</h3>
-              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                <p className="text-gray-400">Nenhuma transação ainda. Importe seus extratos.</p>
+              <p style={{ color: md3.onSurfaceVariant, marginBottom: "24px", fontSize: "14px" }}>
+                Todas as movimentações das suas contas
+              </p>
+              <div style={{
+                background: md3.surfaceContainer,
+                borderRadius: "16px",
+                padding: "48px",
+                border: `1px solid ${md3.surfaceContainerHigh}`,
+                textAlign: "center",
+              }}>
+                <span style={{ fontSize: "40px" }}>💳</span>
+                <p style={{ color: md3.onSurfaceVariant, marginTop: "16px" }}>
+                  Nenhuma transação ainda. Importe seus extratos em Importar Dados.
+                </p>
               </div>
             </div>
           )}
 
+          {/* INVESTIMENTOS */}
           {activePage === "investimentos" && (
             <div>
-              <h3 className="text-2xl font-bold mb-6">Investimentos</h3>
-              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                <p className="text-gray-400">Nenhum investimento ainda. Importe seus extratos.</p>
+              <p style={{ color: md3.onSurfaceVariant, marginBottom: "24px", fontSize: "14px" }}>
+                Portfólio BTG Pactual + Avenue
+              </p>
+              <div style={{
+                background: md3.surfaceContainer,
+                borderRadius: "16px",
+                padding: "48px",
+                border: `1px solid ${md3.surfaceContainerHigh}`,
+                textAlign: "center",
+              }}>
+                <span style={{ fontSize: "40px" }}>📈</span>
+                <p style={{ color: md3.onSurfaceVariant, marginTop: "16px" }}>
+                  Nenhum investimento ainda. Importe seus extratos em Importar Dados.
+                </p>
               </div>
             </div>
           )}
 
+          {/* IMPORTAR */}
           {activePage === "importar" && (
             <div>
-              <h3 className="text-2xl font-bold mb-6">Importar Dados</h3>
-              <div className="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center">
-                <p className="text-4xl mb-4">📥</p>
-                <p className="text-gray-400">Em breve: arraste PDFs, CSVs e prints aqui.</p>
+              <p style={{ color: md3.onSurfaceVariant, marginBottom: "24px", fontSize: "14px" }}>
+                Arraste PDFs, CSVs ou prints dos seus bancos
+              </p>
+              <div style={{
+                background: md3.surfaceContainer,
+                borderRadius: "16px",
+                padding: "64px 48px",
+                border: `2px dashed ${md3.outline}`,
+                textAlign: "center",
+              }}>
+                <span style={{ fontSize: "48px" }}>📥</span>
+                <p style={{ color: md3.onSurface, marginTop: "16px", fontSize: "16px", fontWeight: 500 }}>
+                  Área de importação
+                </p>
+                <p style={{ color: md3.onSurfaceVariant, marginTop: "8px", fontSize: "13px" }}>
+                  Em breve: Claude vai ler seus documentos automaticamente
+                </p>
               </div>
             </div>
           )}
 
+          {/* RELATÓRIOS */}
           {activePage === "relatorios" && (
             <div>
-              <h3 className="text-2xl font-bold mb-6">Relatórios</h3>
-              <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                <p className="text-gray-400">Em breve: relatórios mensais automáticos.</p>
+              <p style={{ color: md3.onSurfaceVariant, marginBottom: "24px", fontSize: "14px" }}>
+                Análises e relatórios mensais
+              </p>
+              <div style={{
+                background: md3.surfaceContainer,
+                borderRadius: "16px",
+                padding: "48px",
+                border: `1px solid ${md3.surfaceContainerHigh}`,
+                textAlign: "center",
+              }}>
+                <span style={{ fontSize: "40px" }}>📄</span>
+                <p style={{ color: md3.onSurfaceVariant, marginTop: "16px" }}>
+                  Relatórios automáticos disponíveis após importar dados.
+                </p>
               </div>
             </div>
           )}
