@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const md3 = {
   background: "#0f0f13",
@@ -18,8 +18,40 @@ const md3 = {
   onSurfaceVariant: "#cac4d0",
 };
 
+type Transacao = {
+  id: string;
+  data: string | Date;
+  descricao: string;
+  valor: number;
+  tipo: string;
+  categoria: string;
+  banco: string;
+  moeda: string;
+};
+
 export default function Home() {
   const [activePage, setActivePage] = useState("dashboard");
+  const [dbStatus, setDbStatus] = useState<"loading" | "ok" | "error">("loading");
+  const [transacoes, setTransacoes] = useState<Transacao[]>([]);
+  const [loadingTransacoes, setLoadingTransacoes] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/transacoes")
+      .then((r) => setDbStatus(r.ok ? "ok" : "error"))
+      .catch(() => setDbStatus("error"));
+  }, []);
+
+  useEffect(() => {
+    if (activePage !== "transacoes") return;
+    setLoadingTransacoes(true);
+    fetch("/api/transacoes")
+      .then((r) => r.json())
+      .then((data) => {
+        setTransacoes(Array.isArray(data) ? data : []);
+        setLoadingTransacoes(false);
+      })
+      .catch(() => setLoadingTransacoes(false));
+  }, [activePage]);
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
@@ -87,7 +119,10 @@ export default function Home() {
 
         {/* Footer */}
         <div style={{ padding: "16px 24px", borderTop: `1px solid ${md3.surfaceContainerHigh}` }}>
-          <div style={{ fontSize: "11px", color: md3.outline }}>v1.0 — em construção</div>
+          <div style={{ fontSize: "11px", color: md3.outline, marginBottom: "4px" }}>v1.0 — em construção</div>
+          <div style={{ fontSize: "11px", color: dbStatus === "ok" ? "#a8d5a2" : dbStatus === "error" ? md3.error : md3.outline }}>
+            {dbStatus === "loading" ? "⏳ conectando..." : dbStatus === "ok" ? "✅ banco conectado" : "❌ erro na conexão"}
+          </div>
         </div>
       </aside>
 
@@ -182,18 +217,81 @@ export default function Home() {
               <p style={{ color: md3.onSurfaceVariant, marginBottom: "24px", fontSize: "14px" }}>
                 Todas as movimentações das suas contas
               </p>
-              <div style={{
-                background: md3.surfaceContainer,
-                borderRadius: "16px",
-                padding: "48px",
-                border: `1px solid ${md3.surfaceContainerHigh}`,
-                textAlign: "center",
-              }}>
-                <span style={{ fontSize: "40px" }}>💳</span>
-                <p style={{ color: md3.onSurfaceVariant, marginTop: "16px" }}>
-                  Nenhuma transação ainda. Importe seus extratos em Importar Dados.
-                </p>
-              </div>
+
+              {loadingTransacoes ? (
+                <div style={{ color: md3.onSurfaceVariant, fontSize: "14px" }}>Carregando...</div>
+              ) : transacoes.length === 0 ? (
+                <div style={{
+                  background: md3.surfaceContainer,
+                  borderRadius: "16px",
+                  padding: "48px",
+                  border: `1px solid ${md3.surfaceContainerHigh}`,
+                  textAlign: "center",
+                }}>
+                  <span style={{ fontSize: "40px" }}>💳</span>
+                  <p style={{ color: md3.onSurfaceVariant, marginTop: "16px" }}>
+                    Nenhuma transação ainda. Importe seus extratos em Importar Dados.
+                  </p>
+                </div>
+              ) : (
+                <div style={{
+                  background: md3.surfaceContainer,
+                  borderRadius: "16px",
+                  border: `1px solid ${md3.surfaceContainerHigh}`,
+                  overflow: "hidden",
+                }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
+                    <thead>
+                      <tr style={{ background: md3.surfaceContainerHigh }}>
+                        {["Data", "Descrição", "Valor", "Tipo", "Categoria", "Banco", "Moeda"].map((col) => (
+                          <th key={col} style={{
+                            padding: "14px 16px",
+                            textAlign: "left",
+                            color: md3.onSurfaceVariant,
+                            fontWeight: 600,
+                            fontSize: "12px",
+                            letterSpacing: "0.3px",
+                          }}>{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {transacoes.map((t, i) => (
+                        <tr key={t.id} style={{
+                          borderTop: `1px solid ${md3.surfaceContainerHigh}`,
+                          background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
+                        }}>
+                          <td style={{ padding: "12px 16px", color: md3.onSurfaceVariant }}>
+                            {new Date(t.data).toLocaleDateString("pt-BR")}
+                          </td>
+                          <td style={{ padding: "12px 16px", color: md3.onSurface }}>{t.descricao}</td>
+                          <td style={{
+                            padding: "12px 16px",
+                            color: t.tipo === "receita" ? "#a8d5a2" : md3.error,
+                            fontWeight: 600,
+                          }}>
+                            {t.tipo === "receita" ? "+" : "-"}
+                            {Number(t.valor).toLocaleString("pt-BR", { style: "currency", currency: t.moeda ?? "BRL" })}
+                          </td>
+                          <td style={{ padding: "12px 16px" }}>
+                            <span style={{
+                              background: t.tipo === "receita" ? "rgba(168,213,162,0.15)" : "rgba(242,184,181,0.15)",
+                              color: t.tipo === "receita" ? "#a8d5a2" : md3.error,
+                              borderRadius: "12px",
+                              padding: "3px 10px",
+                              fontSize: "11px",
+                              fontWeight: 500,
+                            }}>{t.tipo}</span>
+                          </td>
+                          <td style={{ padding: "12px 16px", color: md3.onSurfaceVariant }}>{t.categoria}</td>
+                          <td style={{ padding: "12px 16px", color: md3.onSurfaceVariant }}>{t.banco}</td>
+                          <td style={{ padding: "12px 16px", color: md3.outline }}>{t.moeda}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
