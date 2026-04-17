@@ -1,25 +1,30 @@
 import type { Metadata } from "next";
-import "@fontsource/inter/300.css";
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/500.css";
-import "@fontsource/inter/700.css";
+import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+
+const interTight = Inter_Tight({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-inter-tight",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Finance Pro",
-  description: "Gestão financeira pessoal",
+  description: "Local-first personal finance",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pt-BR">
-      <body style={{ fontFamily: "'Inter', sans-serif", margin: 0 }}>
-        {children}
-      </body>
+    <html lang="pt-BR" data-palette="graphite" data-density="high" data-privacy="off">
+      <body className={`${interTight.variable} ${jetbrainsMono.variable}`}>{children}</body>
     </html>
   );
 }
