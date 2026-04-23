@@ -1,10 +1,10 @@
 "use client";
 
 import { Icon } from "./icons";
-import { Sparkline, CashflowChart, DonutChart, BarList, DailyChart } from "./charts";
+import { Sparkline, CashflowChart, DonutChart, BarList, DailyChart, FXBar } from "./charts";
 import { InsightCard } from "./shell";
 import {
-  I18N, Lang, fmtMoney, fmtDate,
+  I18N, Lang, fmtMoney, fmtDate, acctBRL,
   CASHFLOW_12M, ACCOUNTS, CARDS, TXNS, INSIGHTS, CAT_MONTH, PORTFOLIO, GOALS, UPCOMING, DAILY_30D, NARRATIVE, CAT_COLORS,
 } from "../lib/data";
 
@@ -136,7 +136,7 @@ function DashboardClassic({ lang }: { lang: Lang }) {
                   <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
                   <div style={{ fontSize: 10.5, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{a.type} · {a.number}</div>
                 </div>
-                <div className="num" style={{ fontSize: 12.5, fontWeight: 600 }}>{fmtMoney(a.balance, lang, true)}</div>
+                <div className="num" style={{ fontSize: 12.5, fontWeight: 600 }}>{fmtMoney(acctBRL(a), lang, true)}</div>
               </div>
             ))}
           </div>
@@ -256,6 +256,8 @@ function DashboardCommand({ lang }: { lang: Lang }) {
         ))}
       </div>
 
+      <FXBar lang={lang} />
+
       <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         <div className="card">
           <div className="card-head" style={{ padding: "8px 14px" }}>
@@ -270,7 +272,7 @@ function DashboardCommand({ lang }: { lang: Lang }) {
                     <span style={{ width: 6, height: 6, background: a.color, borderRadius: "50%", display: "inline-block", marginRight: 6 }}></span>
                     {a.name}
                   </td>
-                  <td className="r num" style={{ fontSize: 11.5 }}>{fmtMoney(a.balance, lang, true)}</td>
+                  <td className="r num" style={{ fontSize: 11.5 }}>{fmtMoney(acctBRL(a), lang, true)}</td>
                 </tr>
               ))}
             </tbody>
@@ -473,8 +475,9 @@ interface DashboardProps {
   lang: Lang;
   layout: string;
   setLayout: (l: string) => void;
+  hasData?: boolean;
 }
-export function Dashboard({ lang, layout, setLayout }: DashboardProps) {
+export function Dashboard({ lang, layout, setLayout, hasData = false }: DashboardProps) {
   const t = I18N[lang];
   return (
     <div className="page">
@@ -483,7 +486,6 @@ export function Dashboard({ lang, layout, setLayout }: DashboardProps) {
           <h1 className="page-title">{t.nav_dashboard}</h1>
           <div className="page-sub">
             {new Date().toLocaleDateString(lang === "pt" ? "pt-BR" : "en-US", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}
-            <span style={{ marginLeft: 10 }}>· {lang === "pt" ? "última sincronização" : "last sync"} 4m</span>
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -494,9 +496,35 @@ export function Dashboard({ lang, layout, setLayout }: DashboardProps) {
           </div>
         </div>
       </div>
-      {layout === "classic" && <DashboardClassic lang={lang} />}
-      {layout === "command" && <DashboardCommand lang={lang} />}
-      {layout === "narrative" && <DashboardNarrative lang={lang} />}
+      {hasData ? (
+        <>
+          {layout === "classic" && <DashboardClassic lang={lang} />}
+          {layout === "command" && <DashboardCommand lang={lang} />}
+          {layout === "narrative" && <DashboardNarrative lang={lang} />}
+        </>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 24px", textAlign: "center" }}>
+          <Icon name="dashboard" style={{ width: 48, height: 48, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 18 }} className="" />
+          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
+            {lang === "pt" ? "Nenhum dado ainda" : "No data yet"}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 340, lineHeight: 1.65 }}>
+            {lang === "pt"
+              ? "Importe um extrato, fatura ou nota de negociação para começar a ver seu painel financeiro."
+              : "Import a statement, bill, or brokerage note to start seeing your financial dashboard."}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
+            <button className="btn primary sm" onClick={() => (window as any).__navigate?.("import")}>
+              <Icon name="upload" className="btn-icon" />
+              {lang === "pt" ? "Importar documento" : "Import document"}
+            </button>
+            <button className="btn sm" onClick={() => (window as any).__openTxnEdit?.({ d: new Date().toISOString().slice(0, 10), merch: "", cat: "", acct: "", amt: 0 })}>
+              <Icon name="plus" className="btn-icon" />
+              {lang === "pt" ? "Adicionar transação" : "Add transaction"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

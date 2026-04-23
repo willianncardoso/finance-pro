@@ -13,6 +13,7 @@ import { Txn } from "./lib/data";
 declare global {
   interface Window {
     __openTxnEdit?: (txn: Txn) => void;
+    __toast?: (message: string, kind?: "success" | "warn" | "danger") => void;
   }
 }
 
@@ -46,12 +47,24 @@ export default function Home() {
   const [editTxn, setEditTxn] = useState<Txn | null>(null);
   const [toast, setToast] = useState<{ message: string; kind: "success" | "warn" | "danger" } | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [txns, setTxns] = useState<Txn[]>([]);
+
+  const hasData = txns.length > 0;
 
   useEffect(() => {
     setState(loadState());
     setRoute(loadRoute());
+    try {
+      const stored = localStorage.getItem("fp_txns");
+      if (stored) setTxns(JSON.parse(stored));
+    } catch {}
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    localStorage.setItem("fp_txns", JSON.stringify(txns));
+  }, [txns, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -69,7 +82,14 @@ export default function Home() {
 
   useEffect(() => {
     window.__openTxnEdit = (txn: Txn) => setEditTxn(txn);
-    return () => { delete window.__openTxnEdit; };
+    (window as any).__navigate = navigate;
+    (window as any).__toast = (message: string, kind: "success" | "warn" | "danger" = "success") =>
+      setToast({ message, kind });
+    return () => {
+      delete window.__openTxnEdit;
+      delete (window as any).__navigate;
+      delete (window as any).__toast;
+    };
   }, []);
 
   function updateState(patch: Partial<AppState>) {
@@ -79,6 +99,17 @@ export default function Home() {
   function handleSaveTxn(txn: Txn) {
     setEditTxn(null);
     setToast({ message: state.lang === "pt" ? "Transação atualizada" : "Transaction updated", kind: "success" });
+  }
+
+  function handleImportComplete(newTxns: Txn[]) {
+    setTxns(newTxns);
+    setToast({
+      message: state.lang === "pt"
+        ? `${newTxns.length} transações importadas com sucesso`
+        : `${newTxns.length} transactions imported successfully`,
+      kind: "success",
+    });
+    navigate("accounts");
   }
 
   function navigate(r: string) {
@@ -103,20 +134,20 @@ export default function Home() {
 
       <main className="main">
         {route === "dashboard" && (
-          <Dashboard lang={state.lang} layout={state.layout} setLayout={l => updateState({ layout: l as DashLayout })} />
+          <Dashboard lang={state.lang} layout={state.layout} setLayout={l => updateState({ layout: l as DashLayout })} hasData={hasData} />
         )}
         {route === "accounts" && (
-          <AccountsPage lang={state.lang} onEditTxn={setEditTxn} />
+          <AccountsPage lang={state.lang} onEditTxn={setEditTxn} txns={txns} />
         )}
-        {route === "cards" && <CardsPage lang={state.lang} />}
-        {route === "invest" && <InvestPage lang={state.lang} />}
-        {route === "import" && <ImportPage lang={state.lang} />}
-        {route === "insights" && <InsightsPage lang={state.lang} />}
+        {route === "cards" && <CardsPage lang={state.lang} hasData={hasData} />}
+        {route === "invest" && <InvestPage lang={state.lang} hasData={hasData} />}
+        {route === "import" && <ImportPage lang={state.lang} onImportComplete={handleImportComplete} />}
+        {route === "insights" && <InsightsPage lang={state.lang} hasData={hasData} />}
         {route === "reports" && <ReportsPage lang={state.lang} />}
         {route === "budget" && <BudgetPage lang={state.lang} />}
-        {route === "categories" && <CategoriesPage lang={state.lang} />}
+        {route === "categories" && <CategoriesPage lang={state.lang} hasData={hasData} />}
         {route === "projection" && <ProjectionPage lang={state.lang} />}
-        {route === "recurring" && <RecurringPage lang={state.lang} />}
+        {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} />}
         {route === "settings" && <SettingsPage lang={state.lang} />}
       </main>
 

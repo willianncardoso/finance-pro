@@ -242,9 +242,22 @@ export const CAT_COLORS: Record<string, string> = {
   invest: "oklch(0.55 0.14 220)",
 };
 
+/* FX rates */
+export const FX = { USD: 5.12, EUR: 5.54, GBP: 6.48 };
+
 /* Data types */
 export interface CashflowMonth { m: number; income: number; expense: number; }
-export interface Account { id: string; name: string; type: string; balance: number; number: string; color: string; }
+export interface Account {
+  id: string; name: string; type: string; number: string; color: string; flag?: string; sub?: string;
+  balance?: number;
+  currency?: string;
+  balances?: Record<string, number>;
+  balanceBRL?: number;
+}
+export function acctBRL(a: Account): number {
+  if (a.balanceBRL !== undefined) return a.balanceBRL;
+  return a.balance ?? 0;
+}
 export interface Card { id: string; brand: string; last4: string; limit: number; used: number; close: number; due: number; variant: string; color: string; }
 export interface Txn { d: string; merch: string; cat: string; acct: string; amt: number; sub?: string; recurring?: boolean; exclude?: boolean; reimbursable?: boolean; notes?: string; installment?: string | null; }
 export interface Insight { kind: "warn" | "danger" | "pos" | "info"; t: string; x: string; tag: string; when: string; }
@@ -273,18 +286,35 @@ export const CASHFLOW_12M: CashflowMonth[] = [
 ];
 
 export const ACCOUNTS: Account[] = [
-  { id: "a1", name: "Itaú Conta Corrente", type: "checking", balance: 12480.55, number: "*4412", color: "oklch(0.55 0.14 25)" },
-  { id: "a2", name: "Nubank PJ", type: "checking", balance: 38920.12, number: "*8821", color: "oklch(0.55 0.18 300)" },
-  { id: "a3", name: "Inter Poupança", type: "savings", balance: 22110.00, number: "*9903", color: "oklch(0.58 0.15 30)" },
-  { id: "a4", name: "XP Investimentos", type: "broker", balance: 284510.42, number: "*0012", color: "oklch(0.3 0.02 260)" },
-  { id: "a5", name: "BTG Digital", type: "checking", balance: 4205.87, number: "*7781", color: "oklch(0.25 0.02 260)" },
+  { id: "a1", name: "Nubank", type: "checking", balance: 14820.55, number: "*3391", color: "oklch(0.42 0.18 295)", currency: "BRL", flag: "🇧🇷", sub: "Conta corrente" },
+  { id: "a2", name: "C6 Bank", type: "checking", balance: 8440.20, number: "*7712", color: "oklch(0.22 0.02 260)", currency: "BRL", flag: "🇧🇷", sub: "Conta corrente" },
+  { id: "a3", name: "BTG Pactual", type: "broker", balance: 284510.42, number: "*0042", color: "oklch(0.28 0.03 230)", currency: "BRL", flag: "🇧🇷", sub: "Investimentos" },
+  { id: "a4", name: "Wise", type: "multi", number: "*8821", color: "oklch(0.62 0.16 155)", currency: "multi", flag: "🌍", sub: "Multi-moeda",
+    balances: { BRL: 1240.00, USD: 820.45, EUR: 340.10, GBP: 180.20 },
+    balanceBRL: 1240 + 820.45 * 5.12 + 340.10 * 5.54 + 180.20 * 6.48 },
+  { id: "a5", name: "Revolut", type: "multi", number: "*4490", color: "oklch(0.38 0.14 270)", currency: "multi", flag: "🌍", sub: "Multi-moeda",
+    balances: { BRL: 0, USD: 1245.80, EUR: 892.40, GBP: 0 },
+    balanceBRL: 1245.80 * 5.12 + 892.40 * 5.54 },
+  { id: "a6", name: "Swile", type: "voucher", balance: 1842.00, number: "*2210", color: "oklch(0.6 0.18 25)", currency: "BRL", flag: "🇧🇷", sub: "Vale refeição/alimentação" },
+  { id: "a7", name: "Avenue", type: "broker", number: "*9910", color: "oklch(0.35 0.12 230)", currency: "USD", flag: "🇺🇸", sub: "US stocks & ETFs",
+    balances: { USD: 12480.30 }, balanceBRL: 12480.30 * 5.12 },
 ];
 
 export const CARDS: Card[] = [
-  { id: "c1", brand: "Nubank Ultravioleta", last4: "4412", limit: 28000, used: 7842.30, close: 22, due: 1, variant: "alt1", color: "oklch(0.4 0.12 290)" },
-  { id: "c2", brand: "Itaú Click Platinum", last4: "9981", limit: 15000, used: 11203.87, close: 15, due: 22, variant: "alt3", color: "oklch(0.5 0.14 25)" },
-  { id: "c3", brand: "C6 Carbon Black", last4: "2210", limit: 42000, used: 3120.55, close: 28, due: 7, variant: "", color: "oklch(0.22 0.02 260)" },
-  { id: "c4", brand: "Inter Black", last4: "5540", limit: 12000, used: 6845.00, close: 3, due: 10, variant: "alt2", color: "oklch(0.5 0.14 30)" },
+  { id: "c1", brand: "Nubank Ultravioleta", last4: "3391", limit: 35000, used: 8420.55, close: 22, due: 1, variant: "alt1", color: "oklch(0.38 0.16 292)" },
+  { id: "c2", brand: "C6 Carbon Black", last4: "7712", limit: 42000, used: 11203.87, close: 15, due: 22, variant: "", color: "oklch(0.18 0.02 260)" },
+  { id: "c3", brand: "Wise · Mastercard", last4: "8821", limit: 0, used: 1840.30, close: 0, due: 0, variant: "alt2", color: "oklch(0.58 0.16 155)" },
+  { id: "c4", brand: "Revolut · Virtual", last4: "4490", limit: 0, used: 2100.00, close: 0, due: 0, variant: "alt1", color: "oklch(0.34 0.14 270)" },
+  { id: "c5", brand: "Swile · Refeição", last4: "2210", limit: 0, used: 580.00, close: 0, due: 0, variant: "alt3", color: "oklch(0.58 0.18 25)" },
+];
+
+export interface AvenuePosition { t: string; q: number; pm: number; last: number; currency: string; }
+export const AVENUE_PORTFOLIO: AvenuePosition[] = [
+  { t: "AAPL", q: 8, pm: 168.40, last: 174.20, currency: "USD" },
+  { t: "MSFT", q: 5, pm: 385.20, last: 412.80, currency: "USD" },
+  { t: "VOO",  q: 12, pm: 472.10, last: 505.30, currency: "USD" },
+  { t: "QQQ",  q: 6, pm: 430.50, last: 448.90, currency: "USD" },
+  { t: "NVDA", q: 3, pm: 820.00, last: 876.40, currency: "USD" },
 ];
 
 export const TXNS: Txn[] = [
@@ -501,4 +531,32 @@ export function buildProjection(monthsAhead = 6): ProjectionMonth[] {
     months.push({ ym, label: monthLabel, items, income, expense, net: income - expense });
   }
   return months;
+}
+
+export interface PeriodPreset { id: string; label: string; months: number[]; }
+export const PERIOD_PRESETS: Record<Lang, PeriodPreset[]> = {
+  pt: [
+    { id: "jan", label: "Jan 26", months: [0] }, { id: "feb", label: "Fev 26", months: [1] },
+    { id: "mar", label: "Mar 26", months: [2] }, { id: "apr", label: "Abr 26", months: [3] },
+    { id: "q1", label: "Q1 26", months: [0,1,2] }, { id: "h1", label: "1S 26", months: [0,1,2,3,4,5] },
+    { id: "ytd", label: "YTD 26", months: [0,1,2,3] }, { id: "12m", label: "12 meses", months: [0,1,2,3,4,5,6,7,8,9,10,11] },
+  ],
+  en: [
+    { id: "jan", label: "Jan 26", months: [0] }, { id: "feb", label: "Feb 26", months: [1] },
+    { id: "mar", label: "Mar 26", months: [2] }, { id: "apr", label: "Apr 26", months: [3] },
+    { id: "q1", label: "Q1 26", months: [0,1,2] }, { id: "h1", label: "1H 26", months: [0,1,2,3,4,5] },
+    { id: "ytd", label: "YTD 26", months: [0,1,2,3] }, { id: "12m", label: "12 months", months: [0,1,2,3,4,5,6,7,8,9,10,11] },
+  ],
+};
+
+export interface PeriodData { label: string; income: number; expense: number; net: number; bycat: Record<string, number>; }
+export function buildPeriodData(presets: PeriodPreset[]): PeriodData[] {
+  return presets.map(p => {
+    const ms = p.months.map(m => CASHFLOW_12M[m] || CASHFLOW_12M[m % 12]);
+    const income = ms.reduce((s, x) => s + x.income, 0);
+    const expense = ms.reduce((s, x) => s + x.expense, 0);
+    const bycat: Record<string, number> = {};
+    CAT_MONTH.forEach(c => { bycat[c.k] = c.cur * p.months.length; });
+    return { label: p.label, income, expense, net: income - expense, bycat };
+  });
 }

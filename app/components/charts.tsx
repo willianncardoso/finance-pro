@@ -1,17 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { CashflowMonth, CatMonth, CAT_COLORS, fmtMoney, Lang, I18N } from "../lib/data";
+import { Lang, I18N, fmtMoney, CashflowMonth, CatMonth, CAT_COLORS } from "../lib/data";
 
-interface SparklineProps {
-  data: number[];
-  w?: number;
-  h?: number;
-  color?: string;
-  fill?: boolean;
-  stroke?: number;
-}
-export function Sparkline({ data, w = 120, h = 36, color = "var(--ink)", fill = true, stroke = 1.5 }: SparklineProps) {
+/* ---- Sparkline ---- */
+export function Sparkline({ data, w = 120, h = 36, color = "var(--ink)", fill = true, stroke = 1.5 }: {
+  data: number[]; w?: number; h?: number; color?: string; fill?: boolean; stroke?: number;
+}) {
   if (!data || !data.length) return null;
   const min = Math.min(...data), max = Math.max(...data);
   const range = max - min || 1;
@@ -27,49 +22,45 @@ export function Sparkline({ data, w = 120, h = 36, color = "var(--ink)", fill = 
   );
 }
 
-interface CashflowChartProps {
-  data: CashflowMonth[];
-  lang: Lang;
-  showAnnotations?: boolean;
-}
-export function CashflowChart({ data, lang, showAnnotations = true }: CashflowChartProps) {
-  const W = 700, H = 220, PAD_L = 48, PAD_R = 14, PAD_T = 16, PAD_B = 30;
-  const innerW = W - PAD_L - PAD_R, innerH = H - PAD_T - PAD_B;
-  const max = Math.max(...data.map((d) => Math.max(d.income, d.expense)));
+/* ---- CashflowChart ---- */
+export function CashflowChart({ data, lang, showAnnotations = true }: { data: CashflowMonth[]; lang: Lang; showAnnotations?: boolean }) {
+  const W = 700, H = 220, PL = 48, PR = 14, PT = 16, PB = 30;
+  const innerW = W - PL - PR, innerH = H - PT - PB;
+  const max = Math.max(...data.map(d => Math.max(d.income, d.expense)));
   const step = innerW / data.length;
   const barW = Math.min(step * 0.35, 14);
-  const yAt = (v: number) => PAD_T + innerH - (v / max) * innerH;
+  const yAt = (v: number) => PT + innerH - (v / max) * innerH;
   const months = I18N[lang].months;
+  const [hover, setHover] = useState<number | null>(null);
 
   const netLine = data.map((d, i) => {
-    const x = PAD_L + step * i + step / 2;
+    const x = PL + step * i + step / 2;
     const net = d.income - d.expense;
-    const y = PAD_T + innerH - (net / max) * innerH;
+    const y = PT + innerH - (net / max) * innerH;
     return [x, y, net] as [number, number, number];
   });
   const netPath = netLine.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-  const yTicks = [0, max * 0.5, max].map((v) => ({ v, y: yAt(v) }));
-  const [hover, setHover] = useState<number | null>(null);
+  const yTicks = [0, max * 0.5, max].map(v => ({ v, y: yAt(v) }));
 
   return (
     <div style={{ position: "relative" }}>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
         {yTicks.map((t, i) => (
           <g key={i}>
-            <line x1={PAD_L} x2={W - PAD_R} y1={t.y} y2={t.y} stroke="var(--border)" strokeDasharray={i === 0 ? "0" : "3 3"} />
-            <text x={PAD_L - 6} y={t.y + 3} fontSize="10" textAnchor="end" fill="var(--ink-3)" fontFamily="var(--font-mono)">
+            <line x1={PL} x2={W - PR} y1={t.y} y2={t.y} stroke="var(--border)" strokeDasharray={i === 0 ? "0" : "3 3"} />
+            <text x={PL - 6} y={t.y + 3} fontSize="10" textAnchor="end" fill="var(--ink-3)" fontFamily="var(--font-mono)">
               {t.v >= 1000 ? (t.v / 1000).toFixed(0) + "k" : t.v.toFixed(0)}
             </text>
           </g>
         ))}
         {data.map((d, i) => {
-          const cx = PAD_L + step * i + step / 2;
+          const cx = PL + step * i + step / 2;
           const yI = yAt(d.income), yE = yAt(d.expense);
           return (
             <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} style={{ cursor: "pointer" }}>
-              <rect x={cx - barW - 1} y={yI} width={barW} height={PAD_T + innerH - yI}
+              <rect x={cx - barW - 1} y={yI} width={barW} height={PT + innerH - yI}
                 fill="var(--accent)" opacity={hover === null || hover === i ? 0.9 : 0.4} rx="2" />
-              <rect x={cx + 1} y={yE} width={barW} height={PAD_T + innerH - yE}
+              <rect x={cx + 1} y={yE} width={barW} height={PT + innerH - yE}
                 fill="var(--ink)" opacity={hover === null || hover === i ? 0.85 : 0.35} rx="2" />
               <text x={cx} y={H - 12} fontSize="10" textAnchor="middle" fill="var(--ink-3)" fontFamily="var(--font-mono)">
                 {months[i]}
@@ -83,8 +74,8 @@ export function CashflowChart({ data, lang, showAnnotations = true }: CashflowCh
         ))}
         {showAnnotations && (
           <>
-            <circle cx={PAD_L + step * 6 + step / 2} cy={yAt(16100)} r="6" fill="none" stroke="var(--warn)" strokeWidth="2" />
-            <circle cx={PAD_L + step * 4 + step / 2} cy={yAt(21800)} r="6" fill="none" stroke="var(--accent)" strokeWidth="2" />
+            <circle cx={PL + step * 6 + step / 2} cy={yAt(16100)} r="6" fill="none" stroke="var(--warn)" strokeWidth="2" />
+            <circle cx={PL + step * 4 + step / 2} cy={yAt(21800)} r="6" fill="none" stroke="var(--accent)" strokeWidth="2" />
           </>
         )}
       </svg>
@@ -99,7 +90,7 @@ export function CashflowChart({ data, lang, showAnnotations = true }: CashflowCh
         </>
       )}
       {hover !== null && (
-        <div className="tt" style={{ left: `${((PAD_L + step * hover + step / 2) / W) * 100}%`, top: 8, transform: "translateX(-50%)" }}>
+        <div className="tt" style={{ left: `${((PL + step * hover + step / 2) / W) * 100}%`, top: 8, transform: "translateX(-50%)" }}>
           {months[hover]} · +{(data[hover].income - data[hover].expense).toLocaleString()}
         </div>
       )}
@@ -107,19 +98,19 @@ export function CashflowChart({ data, lang, showAnnotations = true }: CashflowCh
   );
 }
 
-interface DonutChartProps {
+/* ---- DonutChart ---- */
+export function DonutChart({ data, size = 170, thickness = 22 }: {
   data: { v: number; color: string; label?: string }[];
   size?: number;
   thickness?: number;
-}
-export function DonutChart({ data, size = 170, thickness = 22 }: DonutChartProps) {
+}) {
   const total = data.reduce((s, d) => s + d.v, 0);
   const r = size / 2 - thickness / 2;
   const c = size / 2;
   let acc = 0;
   const circ = 2 * Math.PI * r;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
       <circle cx={c} cy={c} r={r} fill="none" stroke="var(--bg-3)" strokeWidth={thickness} />
       {data.map((d, i) => {
         const len = (d.v / total) * circ;
@@ -139,22 +130,24 @@ export function DonutChart({ data, size = 170, thickness = 22 }: DonutChartProps
   );
 }
 
-interface BarListProps {
+/* ---- BarList ---- */
+export function BarList({ items, lang, showBudget = true, onClickItem }: {
   items: CatMonth[];
   lang: Lang;
   showBudget?: boolean;
-}
-export function BarList({ items, lang, showBudget = true }: BarListProps) {
-  const max = Math.max(...items.map((i) => Math.max(i.cur, i.budget || 0)));
+  onClickItem?: (k: string) => void;
+}) {
+  const max = Math.max(...items.map(i => Math.max(i.cur, i.budget || 0)));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-      {items.map((it) => {
+      {items.map(it => {
         const pct = (it.cur / max) * 100;
         const budgetPct = it.budget ? (it.budget / max) * 100 : 0;
         const over = it.budget && it.cur > it.budget;
         const prevPct = (it.prev / max) * 100;
         return (
-          <div key={it.k} style={{ display: "grid", gridTemplateColumns: "120px 1fr 80px", gap: 10, alignItems: "center", fontSize: 12 }}>
+          <div key={it.k} style={{ display: "grid", gridTemplateColumns: "120px 1fr 80px", gap: 10, alignItems: "center", fontSize: 12, cursor: onClickItem ? "pointer" : "default", padding: "3px 4px", borderRadius: 5 }}
+            onClick={() => onClickItem?.(it.k)}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span className="cat-dot" style={{ background: CAT_COLORS[it.k] }}></span>
               <span>{I18N[lang].categories[it.k]}</span>
@@ -166,7 +159,7 @@ export function BarList({ items, lang, showBudget = true }: BarListProps) {
               )}
               <div style={{ position: "absolute", left: `${prevPct}%`, top: 10, width: 5, height: 5, borderRadius: "50%", background: "var(--ink-4)", transform: "translate(-50%, 0)" }} title="mês anterior" />
             </div>
-            <div className="num r" style={{ textAlign: "right", color: over ? "var(--danger)" : "var(--ink)" }}>
+            <div className="num" style={{ textAlign: "right", color: over ? "var(--danger)" : "var(--ink)" }}>
               {fmtMoney(it.cur, lang, true)}
             </div>
           </div>
@@ -176,13 +169,10 @@ export function BarList({ items, lang, showBudget = true }: BarListProps) {
   );
 }
 
-interface DailyChartProps {
-  data: number[];
-  w?: number;
-  h?: number;
-  color?: string;
-}
-export function DailyChart({ data, w = 520, h = 120, color = "var(--ink)" }: DailyChartProps) {
+/* ---- DailyChart ---- */
+export function DailyChart({ data, w = 520, h = 120, color = "var(--ink)" }: {
+  data: number[]; w?: number; h?: number; color?: string;
+}) {
   const max = Math.max(...data);
   const dx = w / (data.length - 1);
   const pts = data.map((v, i) => [i * dx, h - (v / max) * (h - 10) - 4]);
@@ -205,11 +195,11 @@ export function DailyChart({ data, w = 520, h = 120, color = "var(--ink)" }: Dai
   );
 }
 
-interface AllocBarProps {
+/* ---- AllocBar ---- */
+export function AllocBar({ segments, h = 12 }: {
   segments: { v: number; color: string; label: string }[];
   h?: number;
-}
-export function AllocBar({ segments, h = 12 }: AllocBarProps) {
+}) {
   const total = segments.reduce((s, d) => s + d.v, 0);
   return (
     <div style={{ display: "flex", height: h, borderRadius: 4, overflow: "hidden", background: "var(--bg-3)" }}>
@@ -221,54 +211,32 @@ export function AllocBar({ segments, h = 12 }: AllocBarProps) {
   );
 }
 
-interface ProjectionChartProps {
-  months: { label: string }[];
-  balances: number[];
-  lang: Lang;
-}
-export function ProjectionChart({ months, balances, lang: _lang }: ProjectionChartProps) {
-  const W = 800, H = 200, PL = 50, PR = 14, PT = 16, PB = 28;
-  const innerW = W - PL - PR, innerH = H - PT - PB;
-  const max = Math.max(...balances, 100000);
-  const min = Math.min(...balances, 50000);
-  const range = max - min || 1;
-  const step = innerW / (months.length - 1 || 1);
-  const pts = balances.map((b, i) => [PL + step * i, PT + innerH - ((b - min) / range) * innerH]);
-  const d = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-  const fillD = d + ` L${PL + step * (months.length - 1)},${PT + innerH} L${PL},${PT + innerH} Z`;
+/* ---- FXBar ---- */
+export function FXBar({ lang }: { lang: Lang }) {
+  const pairs = [
+    { pair: "USD/BRL", rate: 5.12, prev: 5.08, flag: "🇺🇸" },
+    { pair: "EUR/BRL", rate: 5.54, prev: 5.49, flag: "🇪🇺" },
+    { pair: "GBP/BRL", rate: 6.48, prev: 6.41, flag: "🇬🇧" },
+  ];
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
-      <defs>
-        <linearGradient id="projGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.2" />
-          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {[0, 0.5, 1].map((p, i) => {
-        const v = min + range * p;
-        const y = PT + innerH - p * innerH;
+    <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+      {pairs.map((fx, i) => {
+        const delta = ((fx.rate - fx.prev) / fx.prev) * 100;
         return (
-          <g key={i}>
-            <line x1={PL} x2={W - PR} y1={y} y2={y} stroke="var(--border)" strokeDasharray={i === 0 ? "0" : "3 3"} />
-            <text x={PL - 6} y={y + 3} fontSize="10" textAnchor="end" fill="var(--ink-3)" fontFamily="var(--font-mono)">
-              {(v / 1000).toFixed(0)}k
-            </text>
-          </g>
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}>
+            <span style={{ fontSize: 14 }}>{fx.flag}</span>
+            <span className="mono" style={{ fontSize: 11.5, fontWeight: 600 }}>{fx.pair}</span>
+            <span className="num" style={{ fontSize: 13, fontWeight: 600 }}>{fx.rate.toFixed(2)}</span>
+            <span className={"num " + (delta >= 0 ? "neg" : "pos")} style={{ fontSize: 10.5 }}>{delta > 0 ? "+" : ""}{delta.toFixed(2)}%</span>
+          </div>
         );
       })}
-      <path d={fillD} fill="url(#projGrad)" />
-      <path d={d} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" />
-      {pts.map((p, i) => (
-        <g key={i}>
-          <circle cx={p[0]} cy={p[1]} r="4" fill="var(--surface)" stroke="var(--accent)" strokeWidth="2" />
-          <text x={p[0]} y={H - 10} fontSize="10" textAnchor="middle" fill="var(--ink-3)" fontFamily="var(--font-mono)">
-            {months[i].label}
-          </text>
-          <text x={p[0]} y={p[1] - 10} fontSize="10" textAnchor="middle" fill="var(--ink)" fontFamily="var(--font-mono)" fontWeight="600">
-            {(balances[i] / 1000).toFixed(0)}k
-          </text>
-        </g>
-      ))}
-    </svg>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 11, color: "var(--ink-3)" }}>
+        <svg viewBox="0 0 24 24" style={{ width: 12, height: 12 }} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+        </svg>
+        {lang === "pt" ? "Atualizado 4min atrás" : "Updated 4min ago"}
+      </div>
+    </div>
   );
 }

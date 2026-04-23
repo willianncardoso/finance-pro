@@ -1,341 +1,309 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Icon } from "./icons";
-import { KPI } from "./dashboard";
+import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, ACCOUNTS, TXNS, CARDS, INSIGHTS, PORTFOLIO, LEARNED_RULES, CAT_MONTH } from "../lib/data";
 import { InsightCard } from "./shell";
-import { CashflowChart, DonutChart, BarList, AllocBar, Sparkline } from "./charts";
-import {
-  I18N, Lang, fmtMoney, fmtDate,
-  ACCOUNTS, CARDS, TXNS, INSIGHTS, CAT_MONTH, PORTFOLIO, GOALS, CASHFLOW_12M,
-  CAT_COLORS, LEARNED_RULES, Txn,
-} from "../lib/data";
+
+function EmptyState({ icon, title, sub, cta, onCta }: { icon: string; title: string; sub: string; cta?: string; onCta?: () => void }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
+      <Icon name={icon} style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
+      <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>{sub}</div>
+      {cta && (
+        <button className="btn primary sm" style={{ marginTop: 20 }} onClick={onCta}>
+          <Icon name="upload" className="btn-icon" />
+          {cta}
+        </button>
+      )}
+    </div>
+  );
+}
 
 /* ============ CARDS ============ */
-export function CardsPage({ lang }: { lang: Lang }) {
+export function CardsPage({ lang, hasData = false }: { lang: Lang; hasData?: boolean }) {
   const t = I18N[lang];
-  const [selected, setSelected] = useState(CARDS[1]);
-  const [billTab, setBillTab] = useState<"current" | "open" | "previous">("current");
-
-  const cardTxns: (Txn & { installment?: string | null })[] = [
-    { d: "2026-04-16", merch: "Amazon Brasil", cat: "shopping", acct: "Itaú Click", amt: -489.00, installment: null },
-    { d: "2026-04-15", merch: "iFood", cat: "rest", acct: "Itaú Click", amt: -84.50, installment: null },
-    { d: "2026-04-14", merch: "Pão de Açúcar", cat: "food", acct: "Itaú Click", amt: -312.45, installment: null },
-    { d: "2026-04-13", merch: "Kindle Store", cat: "education", acct: "Itaú Click", amt: -39.90, installment: null },
-    { d: "2026-04-12", merch: "Farmácia SP", cat: "health", acct: "Itaú Click", amt: -124.20, installment: null },
-    { d: "2026-04-11", merch: "Uber Eats", cat: "rest", acct: "Itaú Click", amt: -45.00, installment: null },
-    { d: "2026-04-10", merch: "Shell", cat: "transport", acct: "Itaú Click", amt: -245.00, installment: null },
-    { d: "2026-04-09", merch: "Apple.com · iPad 4/12", cat: "shopping", acct: "Itaú Click", amt: -499.00, installment: "4/12" },
-    { d: "2026-04-08", merch: "Decolar · Passagem", cat: "leisure", acct: "Itaú Click", amt: -1840.00, installment: "1/6" },
-    { d: "2026-04-07", merch: "Cinemark", cat: "leisure", acct: "Itaú Click", amt: -72.00, installment: null },
-  ];
-
-  const pct = (selected.used / selected.limit) * 100;
-
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
-          <div className="page-sub">{CARDS.length} {lang === "pt" ? "cartões ativos" : "active cards"} · {fmtMoney(CARDS.reduce((s, c) => s + c.used, 0), lang, true)} {lang === "pt" ? "em faturas" : "in bills"}</div>
+          <div className="page-sub">{lang === "pt" ? "Gerencie faturas e parcelamentos" : "Manage bills and installments"}</div>
         </div>
-        <button className="btn sm"><Icon name="plus" className="btn-icon" />{lang === "pt" ? "Adicionar cartão" : "Add card"}</button>
+        <button className="btn sm"
+          onClick={() => (window as any).__toast?.(lang === "pt" ? "Adicione cartões importando faturas" : "Add cards by importing statements", "info")}>
+          <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Adicionar cartão" : "Add card"}
+        </button>
       </div>
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 14, overflowX: "auto", paddingBottom: 4 }}>
-        {CARDS.map((c) => {
-          const p = (c.used / c.limit) * 100;
-          const isSel = c.id === selected.id;
-          return (
-            <div key={c.id} onClick={() => setSelected(c)} className="card" style={{
-              minWidth: 260, cursor: "pointer",
-              borderColor: isSel ? "var(--ink)" : "var(--border)",
-              borderWidth: isSel ? 2 : 1,
-              padding: 14, background: c.color, color: "white",
-              position: "relative", overflow: "hidden",
-            }}>
-              <div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, borderRadius: "50%", background: "rgba(255,255,255,0.06)" }}></div>
-              <div style={{ fontSize: 11, opacity: 0.75, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>{c.brand}</div>
-              <div className="mono" style={{ fontSize: 12, opacity: 0.75, marginBottom: 2 }}>•••• {c.last4}</div>
-              <div className="num privacy-mask" style={{ fontSize: 19, fontWeight: 600, marginTop: 6 }}>{fmtMoney(c.used, lang, true)}</div>
-              <div style={{ fontSize: 10.5, opacity: 0.7, marginBottom: 8 }}>{lang === "pt" ? "de" : "of"} {fmtMoney(c.limit, lang, true)}</div>
-              <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: p + "%", background: p > 70 ? "#ffb454" : "white" }}></div>
+      {hasData ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {CARDS.map(c => {
+            const pct = (c.used / c.limit) * 100;
+            const barColor = pct > 80 ? "var(--danger)" : pct > 60 ? "var(--warn)" : "var(--accent)";
+            return (
+              <div key={c.id} className="card card-pad">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{c.brand}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 2 }}>
+                      *{c.last4} · {lang === "pt" ? `fecha dia ${c.close} · vence dia ${c.due}` : `closes day ${c.close} · due day ${c.due}`}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(c.used, lang)}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      {lang === "pt" ? "de" : "of"} {fmtMoney(c.limit, lang)} · {pct.toFixed(0)}%
+                    </div>
+                  </div>
+                </div>
+                <div className="pbar">
+                  <div className="pbar-fill" style={{ width: pct + "%", background: barColor }} />
+                </div>
               </div>
-              <div className="mono" style={{ fontSize: 10, marginTop: 6, opacity: 0.7, display: "flex", justifyContent: "space-between" }}>
-                <span>{lang === "pt" ? "fecha" : "close"} d{c.close}</span>
-                <span>{lang === "pt" ? "vence" : "due"} d{c.due}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div className="card card-pad">
-          <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", fontWeight: 600, marginBottom: 6 }}>
-            {lang === "pt" ? "Fatura atual" : "Current bill"}
-          </div>
-          <div className="num" style={{ fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em" }}>{fmtMoney(selected.used, lang)}</div>
-          <div style={{ marginTop: 10, marginBottom: 6 }}>
-            <div className="pbar" style={{ height: 8 }}>
-              <div className="pbar-fill" style={{ width: pct + "%", background: pct > 70 ? "var(--warn)" : "var(--ink)" }}></div>
-            </div>
-            <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 4, display: "flex", justifyContent: "space-between" }}>
-              <span>{pct.toFixed(1)}% {lang === "pt" ? "do limite" : "of limit"}</span>
-              <span>{lang === "pt" ? "disponível" : "available"}: {fmtMoney(selected.limit - selected.used, lang, true)}</span>
-            </div>
-          </div>
-          {pct > 70 && (
-            <div style={{ marginTop: 10, padding: "8px 10px", background: "var(--warn-bg)", borderRadius: 6, fontSize: 11.5, color: "var(--warn-fg)", display: "flex", alignItems: "center", gap: 6 }}>
-              <Icon name="alert" style={{ width: 13, height: 13 }} className="" />
-              {lang === "pt" ? "Projeção: estourará o limite em 6 dias" : "Forecast: will exceed limit in 6 days"}
-            </div>
-          )}
+            );
+          })}
         </div>
-        <div className="card card-pad">
-          <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", fontWeight: 600, marginBottom: 6 }}>
-            {lang === "pt" ? "Próximos eventos" : "Upcoming events"}
-          </div>
-          {[
-            { l: lang === "pt" ? "Fechamento" : "Closing", d: `d${selected.close}`, sub: lang === "pt" ? "8 dias" : "8 days" },
-            { l: lang === "pt" ? "Vencimento" : "Due date", d: `d${selected.due}`, sub: lang === "pt" ? "22 dias" : "22 days" },
-            { l: lang === "pt" ? "Parcelas futuras" : "Future installments", d: "7", sub: fmtMoney(3240, lang, true) },
-          ].map((e, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: i < 2 ? "1px solid var(--border)" : "none" }}>
-              <div>
-                <div style={{ fontSize: 12.5, fontWeight: 500 }}>{e.l}</div>
-                <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)" }}>{e.sub}</div>
-              </div>
-              <div className="num" style={{ fontSize: 16, fontWeight: 600 }}>{e.d}</div>
-            </div>
-          ))}
-        </div>
-        <div className="card card-pad">
-          <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", fontWeight: 600, marginBottom: 10 }}>
-            {lang === "pt" ? "Análise da fatura" : "Bill analysis"}
-          </div>
-          {[
-            { l: lang === "pt" ? "Shopping" : "Shopping", v: "38%", c: CAT_COLORS.shopping },
-            { l: lang === "pt" ? "Restaurantes" : "Restaurants", v: "22%", c: CAT_COLORS.rest },
-            { l: lang === "pt" ? "Alimentação" : "Groceries", v: "18%", c: CAT_COLORS.food },
-            { l: lang === "pt" ? "Lazer" : "Leisure", v: "12%", c: CAT_COLORS.leisure },
-          ].map((r, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 11.5 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: r.c }}></span>
-              <span>{r.l}</span>
-              <span className="num" style={{ marginLeft: "auto" }}>{r.v}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-head">
-          <h3 className="card-title">{lang === "pt" ? "Transações · " + selected.brand : "Transactions · " + selected.brand}</h3>
-          <div className="card-actions">
-            <div className="seg">
-              <button className={billTab === "current" ? "on" : ""} onClick={() => setBillTab("current")}>{lang === "pt" ? "Fatura atual" : "Current bill"}</button>
-              <button className={billTab === "open" ? "on" : ""} onClick={() => setBillTab("open")}>{lang === "pt" ? "Aberta" : "Open"}</button>
-              <button className={billTab === "previous" ? "on" : ""} onClick={() => setBillTab("previous")}>{lang === "pt" ? "Anterior" : "Previous"}</button>
-            </div>
-          </div>
-        </div>
-        {billTab === "current" ? (
-          <table className="t">
-            <thead><tr>
-              <th>{lang === "pt" ? "Data" : "Date"}</th>
-              <th>{lang === "pt" ? "Estabelecimento" : "Merchant"}</th>
-              <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-              <th>{lang === "pt" ? "Parcela" : "Installment"}</th>
-              <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
-            </tr></thead>
-            <tbody>
-              {cardTxns.map((tx, i) => (
-                <tr key={i}>
-                  <td className="num muted">{fmtDate(tx.d, lang)}</td>
-                  <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                  <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat]}</span></td>
-                  <td className="mono muted" style={{ fontSize: 11 }}>{tx.installment || "—"}</td>
-                  <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(tx.amt, lang)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div style={{ padding: "48px 24px", textAlign: "center", color: "var(--ink-3)" }}>
-            <Icon name="file" style={{ width: 36, height: 36, stroke: "var(--ink-3)", strokeWidth: 1.2, marginBottom: 12 }} className="" />
-            <div style={{ fontSize: 14, fontWeight: 500, color: "var(--ink-2)", marginBottom: 6 }}>
-              {billTab === "open"
-                ? (lang === "pt" ? "Nenhuma transação na fatura aberta" : "No transactions in open bill")
-                : (lang === "pt" ? "Nenhuma transação na fatura anterior" : "No transactions in previous bill")}
-            </div>
-            <div style={{ fontSize: 12 }}>
-              {lang === "pt" ? "As transações aparecerão aqui quando disponíveis" : "Transactions will appear here when available"}
-            </div>
-          </div>
-        )}
-      </div>
+      ) : (
+        <EmptyState
+          icon="card"
+          title={lang === "pt" ? "Nenhum cartão cadastrado" : "No cards yet"}
+          sub={lang === "pt" ? "Adicione um cartão para acompanhar faturas e parcelamentos." : "Add a card to track bills and installments."}
+        />
+      )}
     </div>
   );
 }
 
 /* ============ INVESTMENTS ============ */
-export function InvestPage({ lang }: { lang: Lang }) {
+export function InvestPage({ lang, hasData = false }: { lang: Lang; hasData?: boolean }) {
   const t = I18N[lang];
-  const total = PORTFOLIO.reduce((s, p) => s + (p.q > 1 ? p.q * p.last : p.last), 0);
-  const totalCost = PORTFOLIO.reduce((s, p) => s + (p.q > 1 ? p.q * p.pm : p.pm), 0);
-
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_invest}</h1>
-          <div className="page-sub">8 {lang === "pt" ? "ativos" : "assets"} · {lang === "pt" ? "rentabilidade YTD" : "YTD return"} +11.4% · vs CDI +2.8%</div>
+          <div className="page-sub">{lang === "pt" ? "Ações, FIIs, renda fixa e ETFs" : "Stocks, REITs, fixed income and ETFs"}</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button className="btn sm"><Icon name="upload" className="btn-icon" />{lang === "pt" ? "Importar nota" : "Import note"}</button>
-          <button className="btn primary sm"><Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova operação" : "New trade"}</button>
+          <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
+            <Icon name="upload" className="btn-icon" />{lang === "pt" ? "Importar nota" : "Import note"}
+          </button>
+          <button className="btn primary sm"
+            onClick={() => (window as any).__toast?.(lang === "pt" ? "Nova operação: em breve" : "New trade: coming soon", "warn")}>
+            <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova operação" : "New trade"}
+          </button>
         </div>
       </div>
-
-      <div className="grid g-4" style={{ marginBottom: 14 }}>
-        <KPI label={lang === "pt" ? "Patrimônio" : "Total"} value={fmtMoney(total, lang, true)} delta={{ pos: true, text: `+${fmtMoney(total - totalCost, lang, true)}` }} sub={lang === "pt" ? "resultado total" : "total result"} />
-        <KPI label={lang === "pt" ? "Rentab. mês" : "Monthly return"} value="+4.12%" delta={{ pos: true, text: "vs CDI: +1.8pp" }} />
-        <KPI label={lang === "pt" ? "Proventos 12m" : "Dividends 12m"} value={fmtMoney(8420, lang, true)} delta={{ pos: true, text: "DY: 5.8%" }} />
-        <KPI label={lang === "pt" ? "IR a pagar" : "Tax owed"} value={fmtMoney(612, lang, true)} delta={{ pos: false, text: lang === "pt" ? "vence d30" : "due d30" }} sub={lang === "pt" ? "day-trade abril" : "day-trade April"} />
-      </div>
-
-      <div className="grid" style={{ gridTemplateColumns: "1.3fr 1fr", gap: 14, marginBottom: 14 }}>
+      {hasData ? (
         <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{lang === "pt" ? "Alocação atual" : "Current allocation"}</h3>
-            <button className="btn ghost sm">{lang === "pt" ? "Rebalancear" : "Rebalance"}</button>
-          </div>
-          <div className="card-pad">
-            <AllocBar segments={[
-              { v: 68000, color: "oklch(0.55 0.14 155)", label: "Ações BR" },
-              { v: 45000, color: "oklch(0.65 0.15 30)", label: "ETF" },
-              { v: 89000, color: "oklch(0.55 0.14 220)", label: "CDB/LCI" },
-              { v: 52000, color: "oklch(0.5 0.1 280)", label: "Tesouro" },
-              { v: 30510, color: "oklch(0.6 0.12 90)", label: "FIIs" },
-            ]} h={14} />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginTop: 14 }}>
-              {[
-                { l: "Ações BR", v: "23.9%", t: "15-25%", c: "oklch(0.55 0.14 155)" },
-                { l: "ETF", v: "15.8%", t: "10-20%", c: "oklch(0.65 0.15 30)" },
-                { l: "CDB/LCI", v: "31.3%", t: "30-40%", c: "oklch(0.55 0.14 220)" },
-                { l: "Tesouro", v: "18.3%", t: "15-25%", c: "oklch(0.5 0.1 280)" },
-                { l: "FIIs", v: "10.7%", t: "5-15%", c: "oklch(0.6 0.12 90)" },
-              ].map((a, i) => (
-                <div key={i}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
-                    <span style={{ width: 7, height: 7, background: a.c, borderRadius: 2 }}></span>
-                    <span>{a.l}</span>
-                  </div>
-                  <div className="num" style={{ fontSize: 15, fontWeight: 600, marginTop: 3 }}>{a.v}</div>
-                  <div className="mono" style={{ fontSize: 10, color: "var(--ink-3)" }}>{lang === "pt" ? "meta" : "target"}: {a.t}</div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <table className="t">
+            <thead><tr>
+              <th>{lang === "pt" ? "Ativo" : "Asset"}</th>
+              <th className="r">{lang === "pt" ? "Qtd" : "Qty"}</th>
+              <th className="r">{lang === "pt" ? "P. Médio" : "Avg Price"}</th>
+              <th className="r">{lang === "pt" ? "Atual" : "Current"}</th>
+              <th className="r">P/L</th>
+              <th className="r">DY</th>
+            </tr></thead>
+            <tbody>
+              {PORTFOLIO.map((p, i) => {
+                const pl = (p.last - p.pm) / p.pm * 100;
+                return (
+                  <tr key={i}>
+                    <td className="mono" style={{ fontWeight: 600 }}>{p.t}</td>
+                    <td className="r num">{p.q > 1 ? p.q : "—"}</td>
+                    <td className="r num">{fmtMoney(p.pm, lang)}</td>
+                    <td className="r num">{fmtMoney(p.last, lang)}</td>
+                    <td className={"r num " + (pl >= 0 ? "pos" : "neg")}>{pl > 0 ? "+" : ""}{pl.toFixed(1)}%</td>
+                    <td className="r num muted">{p.dy != null ? p.dy + "%" : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{lang === "pt" ? "Concentração" : "Concentration"}</h3>
-            <span className="pill warn">1 {lang === "pt" ? "alerta" : "alert"}</span>
-          </div>
-          <div style={{ padding: 14 }}>
-            {[
-              { t: "ITSA4", v: 28, warn: true },
-              { t: "IVVB11", v: 18.2, warn: false },
-              { t: "CDB BTG 27", v: 14.1, warn: false },
-              { t: "BOVA11", v: 12.8, warn: false },
-              { t: "Tesouro IPCA 29", v: 9.3, warn: false },
-            ].map((p, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0" }}>
-                <span className="mono" style={{ fontSize: 11.5, width: 110, fontWeight: 600 }}>{p.t}</span>
-                <div className="pbar" style={{ flex: 1 }}>
-                  <div className="pbar-fill" style={{ width: (p.v / 30) * 100 + "%", background: p.warn ? "var(--warn)" : "var(--ink-2)" }}></div>
-                </div>
-                <span className={"num " + (p.warn ? "pill warn" : "")} style={{ fontSize: 11, width: 48, textAlign: "right" }}>{p.v.toFixed(1)}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="tabs">
-          <div className="tab on">{lang === "pt" ? "Posições" : "Positions"}</div>
-          <div className="tab">{lang === "pt" ? "Operações" : "Trades"}</div>
-          <div className="tab">{lang === "pt" ? "Proventos" : "Dividends"}</div>
-          <div className="tab">{lang === "pt" ? "Notas de corretagem" : "Brokerage notes"}</div>
-          <div className="tab">IR 2026</div>
-        </div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Ativo" : "Asset"}</th>
-            <th>{lang === "pt" ? "Tipo" : "Type"}</th>
-            <th className="r">{lang === "pt" ? "Qtd" : "Qty"}</th>
-            <th className="r">{lang === "pt" ? "Preço médio" : "Avg price"}</th>
-            <th className="r">{lang === "pt" ? "Cotação" : "Last"}</th>
-            <th className="r">{lang === "pt" ? "Posição" : "Position"}</th>
-            <th className="r">P/L %</th>
-            <th className="r">DY</th>
-            <th className="r">{lang === "pt" ? "Peso" : "Weight"}</th>
-          </tr></thead>
-          <tbody>
-            {PORTFOLIO.map((p, i) => {
-              const pos = p.q > 1 ? p.q * p.last : p.last;
-              const cost = p.q > 1 ? p.q * p.pm : p.pm;
-              const pnl = (pos - cost) / cost * 100;
-              const weight = (pos / total) * 100;
-              const isFI = p.t.includes("CDB") || p.t.includes("Tesouro");
-              return (
-                <tr key={i}>
-                  <td className="mono" style={{ fontWeight: 600 }}>{p.t}</td>
-                  <td><span className="pill">{isFI ? (lang === "pt" ? "Renda fixa" : "Fixed income") : p.t.includes("BOVA") || p.t.includes("IVVB") ? "ETF" : (lang === "pt" ? "Ação" : "Stock")}</span></td>
-                  <td className="r num">{p.q > 1 ? p.q : "—"}</td>
-                  <td className="r num muted">{p.q > 1 ? p.pm.toFixed(2) : fmtMoney(p.pm, lang, true)}</td>
-                  <td className="r num">{p.q > 1 ? p.last.toFixed(2) : fmtMoney(p.last, lang, true)}</td>
-                  <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(pos, lang, true)}</td>
-                  <td className={"r num " + (pnl >= 0 ? "pos" : "neg")} style={{ fontWeight: 600 }}>{pnl > 0 ? "+" : ""}{pnl.toFixed(2)}%</td>
-                  <td className="r num muted">{p.dy ? p.dy + "%" : "—"}</td>
-                  <td className="r num muted">{weight.toFixed(1)}%</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      ) : (
+        <EmptyState
+          icon="trend"
+          title={lang === "pt" ? "Nenhuma posição cadastrada" : "No positions yet"}
+          sub={lang === "pt" ? "Importe uma nota de corretagem ou adicione uma operação manualmente." : "Import a brokerage note or add a trade manually."}
+          cta={lang === "pt" ? "Importar nota" : "Import note"}
+          onCta={() => (window as any).__navigate?.("import")}
+        />
+      )}
     </div>
   );
 }
 
 /* ============ IMPORT ============ */
-export function ImportPage({ lang }: { lang: Lang }) {
+const PIPE_LABELS_PT = ["Detectar", "Extrair", "Categorizar", "Revisar", "Importar"];
+const PIPE_LABELS_EN = ["Detect", "Extract", "Categorize", "Review", "Import"];
+const PIPE_DELAYS = [900, 1400, 1800]; // ms for steps 1→2, 2→3, 3→4
+
+/* ---- CSV parser (C6 Bank format) ---- */
+function parseCSVLine(line: string): string[] {
+  const cols: string[] = [];
+  let cur = '', inQ = false;
+  for (const ch of line) {
+    if (ch === '"') inQ = !inQ;
+    else if (ch === ',' && !inQ) { cols.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  cols.push(cur);
+  return cols;
+}
+
+function c6Merchant(titulo: string, desc: string): string {
+  const d = desc.trim(), t = titulo.trim();
+  const generic = !d || /^transf\s+enviada\s+pix/i.test(d) || /^evg\d/i.test(d) || (/^\d{3,}/.test(d) && d.includes('-'));
+  if (generic) {
+    return t.replace(/^Recorrência Pix enviada para /i, '')
+      .replace(/^Pix enviado para /i, '')
+      .replace(/^Pix recebido de /i, '')
+      .replace(/^DEBITO DE CARTAO\s*/i, '')
+      .trim() || t;
+  }
+  return d;
+}
+
+function c6Category(titulo: string, desc: string, amt: number): string {
+  const s = `${titulo} ${desc}`.toLowerCase();
+  if (amt > 0) {
+    if (/salari|folha|holerite|remuner/.test(s)) return 'income';
+    if (/dividend|juros sobre capital|outros proventos/.test(s)) return 'income';
+    if (/res de cdb|resgate|rendimento/.test(s)) return 'invest';
+    return 'income';
+  }
+  if (/pedagio|pedágio|c6tag pedagio/.test(s)) return 'transport';
+  if (/estacionamento|c6tag estacion/.test(s)) return 'transport';
+  if (/combustiv|gasolina|posto|abastec/.test(s)) return 'transport';
+  if (/uber|99pop|taxi|cabify/.test(s)) return 'transport';
+  if (/bilhete.nico|sptrans|metrô|metro|trem/.test(s)) return 'transport';
+  if (/aluguel|condomin/.test(s)) return 'housing';
+  if (/enel|eletropaulo|energia|cpfl/.test(s)) return 'housing';
+  if (/comgas|companhia de gas|gás/.test(s)) return 'housing';
+  if (/internet|vivo fibra|claro|net\b/.test(s)) return 'housing';
+  if (/tesouro direto|emissao de cdb|emissão de cdb/.test(s)) return 'invest';
+  if (/receita federal|irpf|darf|tributos federais/.test(s)) return 'tax';
+  if (/farmac|remédio|remedio|medic|consulta|exame|hospital|ortopedic/.test(s)) return 'health';
+  if (/supermercado|mercado|hortifruti|feira|padaria|lichia/.test(s)) return 'food';
+  if (/restauran|almoc|jantar|lanche|pizza|burger|sushi|bar\b/.test(s)) return 'rest';
+  if (/fatura de cart|pgto fat cartao/.test(s)) return 'transfer';
+  if (/curso|escola|treinamento|facul|galindo/.test(s)) return 'education';
+  if (/loteria|cinema|show|ingresso|tatuagem/.test(s)) return 'leisure';
+  if (/wise|cambio/.test(s)) return 'shopping';
+  return 'transfer';
+}
+
+function parseC6CSV(content: string): Txn[] {
+  const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
+  const lines = clean.split('\n');
+  const headerIdx = lines.findIndex(l => l.includes('Entrada') && l.includes('Sa'));
+  if (headerIdx < 0) return [];
+  const txns: Txn[] = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const cols = parseCSVLine(line);
+    if (cols.length < 6) continue;
+    const [dateStr, , titulo, descricao, entradaStr, saidaStr] = cols;
+    const parts = dateStr.split('/');
+    if (parts.length !== 3) continue;
+    const d = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    const entrada = parseFloat(entradaStr) || 0;
+    const saida = parseFloat(saidaStr) || 0;
+    if (entrada === 0 && saida === 0) continue;
+    const amt = entrada > 0 ? entrada : -saida;
+    txns.push({ d, merch: c6Merchant(titulo, descricao), cat: c6Category(titulo, descricao, amt), acct: 'C6 Bank', amt });
+  }
+  return txns.sort((a, b) => b.d.localeCompare(a.d));
+}
+
+export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportComplete?: (txns: Txn[]) => void }) {
   const t = I18N[lang];
   const [drag, setDrag] = useState(false);
-  const [step, setStep] = useState(0);
-  const [fileName, setFileName] = useState("fatura_nubank_abr2026.pdf");
+  const [fileName, setFileName] = useState("");
+  const [pipeStep, setPipeStep] = useState(0);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [history, setHistory] = useState<{ name: string; when: string; count: number }[]>([]);
+  const [rawContent, setRawContent] = useState("");
+  const [parsedTxns, setParsedTxns] = useState<Txn[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Auto-advance steps 1 → 2 → 3 → 4
+  useEffect(() => {
+    if (pipeStep < 1 || pipeStep > 3) return;
+    const timer = setTimeout(() => {
+      let newLogs: string[] = [];
+      if (pipeStep === 1) {
+        const fmt = rawContent.includes('C6') ? 'C6 Bank' : rawContent.includes('Nubank') ? 'Nubank' : lang === 'pt' ? 'Genérico' : 'Generic';
+        newLogs = lang === 'pt'
+          ? [`✓ Formato: Extrato ${fmt}`, `✓ Codificação: UTF-8`]
+          : [`✓ Format: ${fmt} statement`, `✓ Encoding: UTF-8`];
+      } else if (pipeStep === 2) {
+        const rows = rawContent.split('\n').filter(l => l.trim() && /^\d{2}\/\d{2}\/\d{4}/.test(l.trim())).length;
+        newLogs = lang === 'pt'
+          ? [`✓ ${rows} linhas de transação encontradas`, `✓ Campos: Data · Título · Descrição · Valor`]
+          : [`✓ ${rows} transaction rows found`, `✓ Fields: Date · Title · Description · Amount`];
+      } else if (pipeStep === 3) {
+        const txns = parseC6CSV(rawContent);
+        setParsedTxns(txns);
+        const needsReview = txns.filter(tx => tx.cat === 'transfer' && tx.amt < 0).length;
+        newLogs = lang === 'pt'
+          ? [`✓ ${txns.length} transações extraídas`, `✓ ${txns.length - needsReview} categorizadas automaticamente`, `○ ${needsReview} aguardando revisão`]
+          : [`✓ ${txns.length} transactions extracted`, `✓ ${txns.length - needsReview} auto-categorized`, `○ ${needsReview} pending review`];
+      }
+      setLogs(prev => [...prev, ...newLogs]);
+      setPipeStep(s => s + 1);
+    }, PIPE_DELAYS[pipeStep - 1]);
+    return () => clearTimeout(timer);
+  }, [pipeStep, lang, rawContent]);
+
+  function handleFile(file: File) {
     setFileName(file.name);
-    setStep(1);
-    e.target.value = "";
+    setParsedTxns([]);
+    setRawContent("");
+    setLogs([]);
+    const reader = new FileReader();
+    reader.onload = e => {
+      const content = (e.target?.result as string) ?? "";
+      setRawContent(content);
+      setLogs([lang === "pt" ? `✓ Arquivo: ${file.name}` : `✓ File: ${file.name}`]);
+      setPipeStep(1);
+    };
+    reader.readAsText(file, "utf-8");
   }
 
-  const history = [
-    { d: "2026-04-15", name: "fatura_nubank_abr2026.pdf", type: "PDF", bank: "Nubank", txns: 47, status: "done" },
-    { d: "2026-04-10", name: "extrato_itau_032026.ofx", type: "OFX", bank: "Itaú", txns: 132, status: "done" },
-    { d: "2026-04-08", name: "nota_xp_12042026.pdf", type: "PDF", bank: "XP Investimentos", txns: 8, status: "review" },
-    { d: "2026-04-02", name: "extrato_btg_032026.xml", type: "XML", bank: "BTG", txns: 24, status: "done" },
-    { d: "2026-03-28", name: "screenshot_pix.png", type: "IMG", bank: "—", txns: 1, status: "done" },
-  ];
+  function handleConfirm() {
+    if (pipeStep !== 4) return;
+    setPipeStep(5);
+    const count = parsedTxns.length;
+    setTimeout(() => {
+      setLogs(prev => [...prev, ...(lang === "pt"
+        ? [`Salvando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
+        : [`Saving ${count} transactions...`, `✓ Local database updated`, `✓ Done`])]);
+      setHistory(prev => [{
+        name: fileName,
+        when: new Date().toLocaleDateString(lang === "pt" ? "pt-BR" : "en-US", { day: "2-digit", month: "short", year: "numeric" }),
+        count,
+      }, ...prev]);
+      setPipeStep(6);
+      onImportComplete?.(parsedTxns);
+    }, 1200);
+  }
+
+  function handleReset() {
+    setPipeStep(0);
+    setFileName("");
+    setLogs([]);
+  }
+
+  const steps = lang === "pt" ? PIPE_LABELS_PT : PIPE_LABELS_EN;
+  const isProcessing = pipeStep >= 1 && pipeStep <= 5;
+  const isDone = pipeStep === 6;
+  const awaitingConfirm = pipeStep === 4;
 
   return (
     <div className="page">
@@ -353,55 +321,108 @@ export function ImportPage({ lang }: { lang: Lang }) {
             type="file"
             accept=".pdf,.ofx,.qfx,.xml,.csv,.png,.jpg,.jpeg"
             style={{ display: "none" }}
-            onChange={handleFileSelect}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }}
           />
-          <div className={"dz" + (drag ? " drag" : "")}
-            onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); const file = e.dataTransfer.files?.[0]; if (file) { setFileName(file.name); setStep(1); } }}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Icon name="upload" style={{ width: 38, height: 38, stroke: "var(--ink-3)", strokeWidth: 1.3 }} className="" />
-            <div style={{ fontSize: 16, fontWeight: 600, margin: "10px 0 4px" }}>
-              {lang === "pt" ? "Arraste arquivos ou clique para selecionar" : "Drag files or click to select"}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-              {lang === "pt" ? "Faturas, extratos, notas de negociação, comprovantes de Pix, qualquer coisa" : "Bills, statements, brokerage notes, Pix receipts, anything"}
-            </div>
-            <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 14, flexWrap: "wrap" }}>
-              {["PDF", "OFX", "XML", "CSV", "PNG/JPG", "Screenshot"].map((f, i) => (
-                <span key={i} className="pill">{f}</span>
-              ))}
-            </div>
-          </div>
 
-          {step >= 1 && (
+          {isDone ? (
+            <div className="dz" style={{ background: "var(--accent-bg)", borderColor: "var(--accent-fg)", cursor: "default" }}>
+              <Icon name="check" style={{ width: 38, height: 38, stroke: "var(--accent-fg)", strokeWidth: 1.5 }} className="" />
+              <div style={{ fontSize: 16, fontWeight: 600, margin: "10px 0 4px", color: "var(--accent-fg)" }}>
+                {lang === "pt" ? "Importação concluída!" : "Import complete!"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-2)" }}>47 {lang === "pt" ? "transações importadas com sucesso" : "transactions imported successfully"}</div>
+              <button className="btn sm" style={{ marginTop: 14 }} onClick={handleReset}>
+                {lang === "pt" ? "Importar outro arquivo" : "Import another file"}
+              </button>
+            </div>
+          ) : (
+            <div
+              className={"dz" + (drag ? " drag" : "") + (isProcessing ? " drag" : "")}
+              style={isProcessing ? { pointerEvents: "none", opacity: 0.5 } : {}}
+              onDragOver={e => { e.preventDefault(); setDrag(true); }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
+              onClick={() => !isProcessing && fileInputRef.current?.click()}
+            >
+              <Icon name="upload" style={{ width: 38, height: 38, stroke: "var(--ink-3)", strokeWidth: 1.3 }} className="" />
+              <div style={{ fontSize: 16, fontWeight: 600, margin: "10px 0 4px" }}>
+                {lang === "pt" ? "Arraste arquivos ou clique para selecionar" : "Drag files or click to select"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                {lang === "pt" ? "Faturas, extratos, notas de negociação, comprovantes de Pix" : "Bills, statements, brokerage notes, Pix receipts"}
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 14, flexWrap: "wrap" }}>
+                {["PDF", "OFX", "XML", "CSV", "PNG/JPG"].map((f, i) => <span key={i} className="pill">{f}</span>)}
+              </div>
+            </div>
+          )}
+
+          {isProcessing && (
             <div className="card" style={{ marginTop: 14 }}>
               <div className="card-head">
-                <h3 className="card-title">{lang === "pt" ? `Processando · ${fileName}` : `Processing · ${fileName}`}</h3>
-                <button className="btn ghost sm" onClick={() => setStep(0)}><Icon name="x" className="btn-icon" /></button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {pipeStep < 5 && <div className="step-spinner" />}
+                  <h3 className="card-title" style={{ textTransform: "uppercase", letterSpacing: "0.04em", fontSize: 11 }}>
+                    {pipeStep < 5
+                      ? (lang === "pt" ? `Processando · ${fileName}` : `Processing · ${fileName}`)
+                      : (lang === "pt" ? `Importando · ${fileName}` : `Importing · ${fileName}`)}
+                  </h3>
+                </div>
+                <button className="btn ghost sm" onClick={handleReset}>
+                  <Icon name="x" className="btn-icon" />
+                </button>
               </div>
               <div className="card-pad">
-                <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-                  {["Detectar", "Extrair", "Categorizar", "Revisar", "Importar"].map((s, i) => (
-                    <div key={i} style={{ flex: 1 }}>
-                      <div style={{ height: 4, borderRadius: 2, background: i < 3 ? "var(--accent)" : "var(--bg-3)", marginBottom: 6 }}></div>
-                      <div style={{ fontSize: 10.5, color: i < 3 ? "var(--ink)" : "var(--ink-3)", fontWeight: 500 }}>
-                        {i < 3 && <Icon name="check" style={{ width: 10, height: 10, stroke: "var(--accent)", verticalAlign: "middle", marginRight: 3 }} className="" />}
-                        {s}
+                {/* Step bars */}
+                <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+                  {steps.map((s, i) => {
+                    const stepNum = i + 1;
+                    const done = pipeStep > stepNum;
+                    const active = pipeStep === stepNum;
+                    return (
+                      <div key={i} style={{ flex: 1 }}>
+                        <div style={{
+                          height: 4,
+                          borderRadius: 2,
+                          background: done || active ? "var(--accent)" : "var(--bg-3)",
+                          marginBottom: 5,
+                          animation: active ? "pipe-pulse 1s ease-in-out infinite" : "none",
+                        }} />
+                        <div style={{ fontSize: 10, fontWeight: done || active ? 600 : 400, color: done ? "var(--accent-fg)" : active ? "var(--ink)" : "var(--ink-3)", display: "flex", alignItems: "center", gap: 2 }}>
+                          {done && <Icon name="check" style={{ width: 9, height: 9, stroke: "var(--accent-fg)" }} className="" />}
+                          {s}
+                        </div>
                       </div>
-                    </div>
+                    );
+                  })}
+                </div>
+
+                {/* Log output */}
+                <div style={{ padding: "12px 14px", background: "var(--bg-2)", borderRadius: 8, marginBottom: 14, fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
+                  {logs.map((l, i) => (
+                    <div key={i} style={{ color: l.startsWith("○") ? "var(--ink-3)" : "var(--ink)" }}>{l}</div>
                   ))}
+                  {pipeStep < 4 && <span className="pipe-cursor" style={{ color: "var(--ink-3)" }}>▌</span>}
+                  {awaitingConfirm && (
+                    <div style={{ marginTop: 8, color: "var(--accent-fg)", fontWeight: 600 }}>
+                      {lang === "pt" ? "→ Pronto para importar. Revise e confirme." : "→ Ready to import. Review and confirm."}
+                    </div>
+                  )}
                 </div>
-                <div style={{ padding: 14, background: "var(--bg-2)", borderRadius: 8, marginBottom: 12, fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6 }}>
-                  <div>✓ {lang === "pt" ? "Formato detectado: Nubank · fatura de cartão" : "Format detected: Nubank · credit card bill"}</div>
-                  <div>✓ 47 {lang === "pt" ? "transações extraídas" : "transactions extracted"}</div>
-                  <div>✓ {lang === "pt" ? "44 categorizadas automaticamente" : "44 auto-categorized"}</div>
-                  <div style={{ color: "var(--warn-fg)" }}>⚠ 3 {lang === "pt" ? "precisam de revisão" : "need review"}</div>
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
-                  <button className="btn sm" onClick={() => setStep(0)}>{lang === "pt" ? "Cancelar" : "Cancel"}</button>
-                  <button className="btn primary sm">{lang === "pt" ? "Importar 47 transações" : "Import 47 transactions"}</button>
+
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <button className="btn sm" onClick={handleReset}>
+                    {lang === "pt" ? "Cancelar" : "Cancel"}
+                  </button>
+                  <button
+                    className="btn primary sm"
+                    disabled={!awaitingConfirm}
+                    onClick={handleConfirm}
+                    style={{ opacity: awaitingConfirm ? 1 : 0.4, cursor: awaitingConfirm ? "pointer" : "not-allowed" }}
+                  >
+                    {lang === "pt" ? "Confirmar importação" : "Confirm import"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -411,8 +432,8 @@ export function ImportPage({ lang }: { lang: Lang }) {
         <div>
           <div className="card card-pad" style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-              <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--accent-bg)", display: "grid", placeItems: "center", color: "var(--accent-fg)" }}>
-                <Icon name="lock" style={{ width: 17, height: 17 }} className="" />
+              <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--accent-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <Icon name="lock" style={{ width: 17, height: 17, stroke: "var(--accent-fg)" }} className="" />
               </div>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{lang === "pt" ? "Tudo processado localmente" : "Everything processed locally"}</div>
@@ -450,96 +471,92 @@ export function ImportPage({ lang }: { lang: Lang }) {
         <div className="card-head">
           <h3 className="card-title">{lang === "pt" ? "Histórico de importações" : "Import history"}</h3>
         </div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Data" : "Date"}</th>
-            <th>{lang === "pt" ? "Arquivo" : "File"}</th>
-            <th>{lang === "pt" ? "Tipo" : "Type"}</th>
-            <th>{lang === "pt" ? "Origem" : "Source"}</th>
-            <th className="r">{lang === "pt" ? "Transações" : "Transactions"}</th>
-            <th>{lang === "pt" ? "Status" : "Status"}</th>
-          </tr></thead>
-          <tbody>
+        {history.length === 0 ? (
+          <EmptyState
+            icon="file"
+            title={lang === "pt" ? "Nenhuma importação ainda" : "No imports yet"}
+            sub={lang === "pt" ? "O histórico das suas importações aparecerá aqui." : "Your import history will appear here."}
+          />
+        ) : (
+          <div>
             {history.map((h, i) => (
-              <tr key={i}>
-                <td className="num muted">{fmtDate(h.d, lang)}</td>
-                <td className="mono" style={{ fontSize: 11.5 }}>{h.name}</td>
-                <td><span className="chip-sm">{h.type}</span></td>
-                <td>{h.bank}</td>
-                <td className="r num">{h.txns}</td>
-                <td>
-                  <span className={"pill " + (h.status === "done" ? "accent" : "warn") + " dot"}>
-                    {h.status === "done" ? (lang === "pt" ? "Importado" : "Imported") : (lang === "pt" ? "Revisar" : "Review")}
-                  </span>
-                </td>
-              </tr>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: i < history.length - 1 ? "1px solid var(--border)" : "none" }}>
+                <Icon name="file" style={{ width: 15, height: 15, stroke: "var(--accent-fg)" }} className="" />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500 }}>{h.name}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{h.when}</div>
+                </div>
+                <span className="pill">{h.count} {lang === "pt" ? "transações" : "transactions"}</span>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 /* ============ INSIGHTS ============ */
-export function InsightsPage({ lang }: { lang: Lang }) {
+export function InsightsPage({ lang, hasData = false }: { lang: Lang; hasData?: boolean }) {
   const t = I18N[lang];
   const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? INSIGHTS[lang] : INSIGHTS[lang].filter((i) => i.kind === filter);
+  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+
+  const allInsights = INSIGHTS[lang];
+  const visible = allInsights.filter((ins, i) =>
+    !dismissed.has(i) && (filter === "all" || ins.kind === filter)
+  );
+
+  const FILTERS = [
+    { k: "all", l: lang === "pt" ? "Todos" : "All" },
+    { k: "warn", l: lang === "pt" ? "Atenção" : "Warnings" },
+    { k: "danger", l: lang === "pt" ? "Urgentes" : "Urgent" },
+    { k: "pos", l: lang === "pt" ? "Positivos" : "Positive" },
+    { k: "info", l: "Info" },
+  ];
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_insights}</h1>
-          <div className="page-sub">{lang === "pt" ? "Análises automáticas baseadas nos seus dados · atualizadas a cada hora" : "Automatic analyses based on your data · refreshed hourly"}</div>
+          <div className="page-sub">{lang === "pt" ? "Análises automáticas baseadas nos seus dados" : "Automatic analyses based on your data"}</div>
         </div>
         <div className="seg">
-          {[
-            { k: "all", l: lang === "pt" ? "Todos" : "All", n: INSIGHTS[lang].length },
-            { k: "warn", l: lang === "pt" ? "Atenção" : "Warnings" },
-            { k: "danger", l: lang === "pt" ? "Urgentes" : "Urgent" },
-            { k: "pos", l: lang === "pt" ? "Positivos" : "Positive" },
-            { k: "info", l: "Info" },
-          ].map((f) => (
-            <button key={f.k} className={filter === f.k ? "on" : ""} onClick={() => setFilter(f.k)}>
-              {f.l}{f.n ? ` (${f.n})` : ""}
-            </button>
+          {FILTERS.map((f) => (
+            <button key={f.k} className={filter === f.k ? "on" : ""} onClick={() => setFilter(f.k)}>{f.l}</button>
           ))}
         </div>
       </div>
-
-      <div className="grid" style={{ gridTemplateColumns: "1fr 320px", gap: 14 }}>
-        <div className="card">
-          {filtered.map((ins, i) => <InsightCard key={i} insight={ins} lang={lang} />)}
-        </div>
-        <div>
-          <div className="card card-pad" style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", fontWeight: 600, marginBottom: 8 }}>
-              {lang === "pt" ? "Resumo do mês" : "Month summary"}
-            </div>
-            {[
-              { l: lang === "pt" ? "Alertas gerados" : "Alerts generated", v: 23, c: "var(--ink)" },
-              { l: lang === "pt" ? "Ações aplicadas" : "Actions applied", v: 14, c: "var(--accent)" },
-              { l: lang === "pt" ? "Economia sugerida" : "Suggested savings", v: "R$ 1.840", c: "var(--accent)" },
-              { l: lang === "pt" ? "Tempo poupado" : "Time saved", v: "4.2h", c: "var(--ink-2)" },
-            ].map((r, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < 3 ? "1px solid var(--border)" : "none" }}>
-                <span style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.l}</span>
-                <span className="num" style={{ fontSize: 13, fontWeight: 600, color: r.c }}>{r.v}</span>
-              </div>
+      {hasData ? (
+        visible.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {visible.map((ins, i) => (
+              <InsightCard
+                key={i}
+                insight={ins}
+                lang={lang}
+                onDismiss={() => setDismissed(prev => new Set([...prev, allInsights.indexOf(ins)]))}
+                onInvestigate={() => (window as any).__navigate?.("accounts")}
+              />
             ))}
           </div>
-          <div className="card card-pad" style={{ background: "linear-gradient(135deg, var(--accent-bg), var(--bg-2))" }}>
-            <Icon name="sparkle" style={{ width: 18, height: 18, stroke: "var(--accent-fg)" }} className="" />
-            <div style={{ fontWeight: 600, fontSize: 13, margin: "8px 0 4px" }}>{lang === "pt" ? "Configurar alertas" : "Configure alerts"}</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-2)", lineHeight: 1.55 }}>
-              {lang === "pt" ? "Defina gatilhos personalizados: gasto por categoria, variação de ativo…" : "Set custom triggers: category spend, asset variance, FX rate changes…"}
-            </div>
-            <button className="btn sm" style={{ marginTop: 10 }}>{lang === "pt" ? "Abrir" : "Open"} →</button>
-          </div>
-        </div>
-      </div>
+        ) : (
+          <EmptyState
+            icon="insight"
+            title={lang === "pt" ? "Nenhum insight ativo" : "No active insights"}
+            sub={lang === "pt" ? "Todos os insights foram dispensados ou não há alertas para este filtro." : "All insights were dismissed or none match this filter."}
+          />
+        )
+      ) : (
+        <EmptyState
+          icon="insight"
+          title={lang === "pt" ? "Nenhum insight disponível" : "No insights yet"}
+          sub={lang === "pt" ? "Os insights aparecem automaticamente após a importação dos seus dados." : "Insights appear automatically after you import your data."}
+          cta={lang === "pt" ? "Importar documento" : "Import document"}
+          onCta={() => (window as any).__navigate?.("import")}
+        />
+      )}
     </div>
   );
 }
@@ -562,76 +579,19 @@ export function ReportsPage({ lang }: { lang: Lang }) {
             <button className={period === "12m" ? "on" : ""} onClick={() => setPeriod("12m")}>{t.last_12m}</button>
             <button className={period === "ytd" ? "on" : ""} onClick={() => setPeriod("ytd")}>{t.ytd}</button>
           </div>
-          <button className="btn sm"><Icon name="download" className="btn-icon" />{lang === "pt" ? "Exportar" : "Export"}</button>
+          <button className="btn sm"
+            onClick={() => (window as any).__toast?.(lang === "pt" ? "Exportação em PDF/CSV: em breve" : "PDF/CSV export: coming soon", "warn")}>
+            <Icon name="download" className="btn-icon" />{lang === "pt" ? "Exportar" : "Export"}
+          </button>
         </div>
       </div>
-
-      <div className="grid g-4" style={{ marginBottom: 14 }}>
-        <KPI label={lang === "pt" ? "Receita total" : "Total income"} value={fmtMoney(58400, lang, true)} delta={{ pos: true, text: "+8.2%" }} sub="90d" />
-        <KPI label={lang === "pt" ? "Gastos totais" : "Total expense"} value={fmtMoney(44680, lang, true)} delta={{ pos: false, text: "+14.1%" }} sub="90d" />
-        <KPI label={lang === "pt" ? "Saldo líquido" : "Net"} value={fmtMoney(13720, lang, true)} delta={{ pos: false, text: "-12.4%" }} sub="90d" />
-        <KPI label={lang === "pt" ? "Taxa de poupança" : "Savings rate"} value="23.5%" delta={{ pos: false, text: "-6.1pp" }} sub="90d" />
-      </div>
-
-      <div className="grid" style={{ gridTemplateColumns: "1.6fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div className="card">
-          <div className="card-head"><h3 className="card-title">{lang === "pt" ? "Fluxo de caixa · 12 meses" : "Cash flow · 12 months"}</h3></div>
-          <div className="card-pad"><CashflowChart data={CASHFLOW_12M} lang={lang} showAnnotations={false} /></div>
-        </div>
-        <div className="card">
-          <div className="card-head"><h3 className="card-title">{lang === "pt" ? "Distribuição por categoria" : "Category distribution"}</h3></div>
-          <div className="card-pad" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <DonutChart data={CAT_MONTH.map((c) => ({ v: c.cur, color: CAT_COLORS[c.k] }))} size={150} />
-            <div style={{ flex: 1 }}>
-              {CAT_MONTH.slice(0, 6).map((c) => {
-                const total = CAT_MONTH.reduce((s, x) => s + x.cur, 0);
-                const pct = (c.cur / total) * 100;
-                return (
-                  <div key={c.k} style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 0", fontSize: 11.5 }}>
-                    <span style={{ width: 7, height: 7, background: CAT_COLORS[c.k], borderRadius: 2 }}></span>
-                    <span>{I18N[lang].categories[c.k]}</span>
-                    <span className="num muted" style={{ marginLeft: "auto" }}>{pct.toFixed(1)}%</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-head"><h3 className="card-title">{lang === "pt" ? "Comparativo mensal · últimos 6 meses" : "Monthly comparison · last 6 months"}</h3></div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Mês" : "Month"}</th>
-            <th className="r">{lang === "pt" ? "Receita" : "Income"}</th>
-            <th className="r">{lang === "pt" ? "Gastos" : "Expense"}</th>
-            <th className="r">{lang === "pt" ? "Líquido" : "Net"}</th>
-            <th className="r">{lang === "pt" ? "Poupança" : "Savings"}</th>
-            <th>{lang === "pt" ? "Categoria top" : "Top category"}</th>
-            <th className="r">Δ {lang === "pt" ? "anterior" : "prev"}</th>
-          </tr></thead>
-          <tbody>
-            {CASHFLOW_12M.slice(6).map((m, i) => {
-              const net = m.income - m.expense;
-              const rate = ((net / m.income) * 100).toFixed(1);
-              const prev = i > 0 ? CASHFLOW_12M[6 + i - 1].expense : m.expense;
-              const delta = (((m.expense - prev) / prev) * 100).toFixed(1);
-              return (
-                <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{I18N[lang].months[m.m]} / 2026</td>
-                  <td className="r num pos">{fmtMoney(m.income, lang, true)}</td>
-                  <td className="r num">{fmtMoney(m.expense, lang, true)}</td>
-                  <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(net, lang, true)}</td>
-                  <td className="r num">{rate}%</td>
-                  <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS.housing }}></span>{I18N[lang].categories.housing}</span></td>
-                  <td className={"r num " + (Number(delta) > 0 ? "neg" : "pos")}>{Number(delta) > 0 ? "+" : ""}{delta}%</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <EmptyState
+        icon="report"
+        title={lang === "pt" ? "Nenhum dado para relatório" : "No data for reports"}
+        sub={lang === "pt" ? "Os relatórios são gerados automaticamente a partir das suas transações importadas." : "Reports are generated automatically from your imported transactions."}
+        cta={lang === "pt" ? "Importar documento" : "Import document"}
+        onCta={() => (window as any).__navigate?.("import")}
+      />
     </div>
   );
 }
@@ -646,168 +606,107 @@ export function BudgetPage({ lang }: { lang: Lang }) {
           <h1 className="page-title">{t.nav_budget}</h1>
           <div className="page-sub">{lang === "pt" ? "Orçamento mensal + metas de longo prazo" : "Monthly budget + long-term goals"}</div>
         </div>
-        <button className="btn primary sm"><Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova meta" : "New goal"}</button>
+        <button className="btn primary sm"
+          onClick={() => (window as any).__toast?.(lang === "pt" ? "Nova meta: em breve" : "New goal: coming soon", "warn")}>
+          <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova meta" : "New goal"}
+        </button>
       </div>
-
-      <div className="grid" style={{ gridTemplateColumns: "1.4fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{t.section_budget} · {I18N[lang].months[3]}</h3>
-            <span className="pill warn">2 {lang === "pt" ? "estouradas" : "over budget"}</span>
-          </div>
-          <div className="card-pad"><BarList items={CAT_MONTH} lang={lang} /></div>
-        </div>
-        <div className="card card-pad">
-          <div style={{ marginBottom: 14 }}>
-            <div className="num" style={{ fontSize: 28, fontWeight: 600, letterSpacing: "-0.02em", color: "var(--ink)" }}>
-              {fmtMoney(17240, lang)} / {fmtMoney(13600, lang)}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--danger)", fontWeight: 500, marginTop: 4 }}>
-              {lang === "pt" ? "26.8% acima do orçamento" : "26.8% over budget"}
-            </div>
-          </div>
-          <div className="pbar" style={{ height: 10, marginBottom: 14 }}>
-            <div className="pbar-fill" style={{ width: "100%", background: "var(--danger)" }}></div>
-          </div>
-          <div style={{ padding: 12, background: "var(--warn-bg)", borderRadius: 8, fontSize: 11.5, lineHeight: 1.55, color: "var(--warn-fg)" }}>
-            <strong>{lang === "pt" ? "Categorias estouradas:" : "Over-budget categories:"}</strong>
-            <div style={{ marginTop: 5 }}>
-              • {I18N[lang].categories.rest}: +{fmtMoney(442, lang)} (31%)<br />
-              • {I18N[lang].categories.shopping}: +{fmtMoney(1120, lang)} (56%)
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-head"><h3 className="card-title">{t.section_goals}</h3></div>
-        <div className="card-pad" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 18 }}>
-          {GOALS.map((g) => {
-            const pct = (g.current / g.target) * 100;
-            const monthsLeft = (new Date(g.when).getFullYear() - 2026) * 12 + (new Date(g.when).getMonth() - 3);
-            const needed = (g.target - g.current) / Math.max(monthsLeft, 1);
-            return (
-              <div key={g.key} style={{ padding: 14, background: "var(--bg-2)", borderRadius: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 600 }}>{String(I18N[lang][`goal_${g.key}` as keyof typeof I18N.pt] ?? g.key)}</div>
-                    <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{lang === "pt" ? "meta" : "target"}: {g.when}</div>
-                  </div>
-                  <span className="num" style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em" }}>{pct.toFixed(0)}%</span>
-                </div>
-                <div className="pbar" style={{ height: 8, marginBottom: 10 }}>
-                  <div className="pbar-fill" style={{ width: pct + "%", background: "var(--accent)" }}></div>
-                </div>
-                <div className="mono" style={{ fontSize: 11, color: "var(--ink-2)", display: "flex", justifyContent: "space-between" }}>
-                  <span>{fmtMoney(g.current, lang, true)} / {fmtMoney(g.target, lang, true)}</span>
-                  <span>{lang === "pt" ? "precisa" : "need"} {fmtMoney(needed, lang, true)}/{lang === "pt" ? "mês" : "mo"}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <EmptyState
+        icon="target"
+        title={lang === "pt" ? "Nenhum orçamento definido" : "No budget set"}
+        sub={lang === "pt" ? "Defina metas por categoria e acompanhe o progresso ao longo do mês." : "Set goals by category and track progress over the month."}
+      />
     </div>
   );
 }
 
 /* ============ ACCOUNTS ============ */
-export function AccountsPage({ lang, onEditTxn }: { lang: Lang; onEditTxn?: (tx: Txn) => void }) {
+export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEditTxn?: (tx: Txn) => void; txns?: Txn[] }) {
   const t = I18N[lang];
+  const hasRealData = txns.length > 0;
+
+  // Compute account summaries from real txns
+  const acctBalances = new Map<string, number>();
+  txns.forEach(tx => acctBalances.set(tx.acct, (acctBalances.get(tx.acct) ?? 0) + tx.amt));
+  const computedAccounts = Array.from(acctBalances.entries()).map(([name, balance]) => ({ name, balance }));
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_accounts}</h1>
-          <div className="page-sub">{ACCOUNTS.length} {lang === "pt" ? "contas · saldo consolidado" : "accounts · consolidated balance"} {fmtMoney(ACCOUNTS.reduce((s, a) => s + a.balance, 0), lang, true)}</div>
+          <div className="page-sub">{lang === "pt" ? "Contas bancárias e extratos" : "Bank accounts and statements"}</div>
         </div>
-        <button className="btn sm"><Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova conta" : "New account"}</button>
+        <button className="btn sm"
+          onClick={() => (window as any).__toast?.(lang === "pt" ? "Importe um extrato para adicionar contas automaticamente" : "Import a statement to add accounts automatically", "info")}>
+          <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova conta" : "New account"}
+        </button>
       </div>
-      <div className="grid g-3" style={{ marginBottom: 14 }}>
-        {ACCOUNTS.map((a) => (
-          <div key={a.id} className="card card-pad">
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 8, background: a.color, display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                {a.name.split(" ")[0].slice(0, 2).toUpperCase()}
+
+      {hasRealData ? (
+        <>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            {computedAccounts.map((a, idx) => (
+              <div key={idx} className="card card-pad" style={{ flex: "1 1 180px" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ width: 26, height: 26, borderRadius: 6, background: "var(--accent)", display: "grid", placeItems: "center", color: "white", fontSize: 9, fontWeight: 700, flexShrink: 0 }}>
+                    {a.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.01em" }}>{fmtMoney(a.balance, lang)}</div>
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
-                <div className="mono muted" style={{ fontSize: 10.5 }}>{a.type} · {a.number}</div>
-              </div>
-            </div>
-            <div className="num" style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em" }}>{fmtMoney(a.balance, lang, true)}</div>
-            <Sparkline data={[100, 102, 98, 105, 110, 108, 115, 118, 120, 125, 128, 130]} w={240} h={30} color="var(--ink-3)" />
-          </div>
-        ))}
-      </div>
-      <div className="card">
-        <div className="card-head"><h3 className="card-title">{t.section_recent}</h3></div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Data" : "Date"}</th>
-            <th>{lang === "pt" ? "Descrição" : "Description"}</th>
-            <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-            <th>{lang === "pt" ? "Conta" : "Account"}</th>
-            <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
-          </tr></thead>
-          <tbody>
-            {TXNS.map((tx, i) => (
-              <tr key={i} onClick={() => onEditTxn && onEditTxn(tx)} style={{ cursor: onEditTxn ? "pointer" : "default" }}>
-                <td className="num muted">{fmtDate(tx.d, lang)}</td>
-                <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat]}</span></td>
-                <td className="muted">{tx.acct}</td>
-                <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>{tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}</td>
-              </tr>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+          <div className="card">
+            <div className="card-head">
+              <h3 className="card-title">{lang === "pt" ? "Transações recentes" : "Recent transactions"}</h3>
+              <span className="chip-sm">{txns.length}</span>
+            </div>
+            <table className="t">
+              <thead><tr>
+                <th>{lang === "pt" ? "Data" : "Date"}</th>
+                <th>{lang === "pt" ? "Descrição" : "Description"}</th>
+                <th>{lang === "pt" ? "Categoria" : "Category"}</th>
+                <th>{lang === "pt" ? "Conta" : "Account"}</th>
+                <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
+              </tr></thead>
+              <tbody>
+                {txns.map((tx, i) => (
+                  <tr key={i} style={{ cursor: "pointer" }} onClick={() => onEditTxn?.(tx)}>
+                    <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
+                    <td style={{ fontWeight: 500 }}>{tx.merch}</td>
+                    <td>
+                      <span className="pill">
+                        <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>
+                        {I18N[lang].categories[tx.cat] ?? tx.cat}
+                      </span>
+                    </td>
+                    <td className="muted" style={{ fontSize: 11.5 }}>{tx.acct}</td>
+                    <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
+                      {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <EmptyState
+          icon="wallet"
+          title={lang === "pt" ? "Nenhuma conta cadastrada" : "No accounts yet"}
+          sub={lang === "pt" ? "Importe um extrato bancário ou adicione uma conta manualmente." : "Import a bank statement or add an account manually."}
+          cta={lang === "pt" ? "Importar extrato" : "Import statement"}
+          onCta={() => (window as any).__navigate?.("import")}
+        />
+      )}
     </div>
   );
 }
 
 /* ============ CATEGORIES ============ */
-function LearnedRulesPanel({ lang }: { lang: Lang }) {
-  return (
-    <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-head">
-        <h3 className="card-title">
-          <Icon name="sparkle" style={{ width: 12, height: 12, verticalAlign: "middle", marginRight: 4 }} className="" />
-          {lang === "pt" ? "Regras aprendidas" : "Learned rules"}
-        </h3>
-        <span className="chip-sm">{LEARNED_RULES.length}</span>
-      </div>
-      <table className="t">
-        <thead><tr>
-          <th>{lang === "pt" ? "Padrão" : "Pattern"}</th>
-          <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-          <th>{lang === "pt" ? "Subcategoria" : "Subcategory"}</th>
-          <th className="r">{lang === "pt" ? "Confiança" : "Confidence"}</th>
-          <th className="r">{lang === "pt" ? "Aplicado" : "Applied"}</th>
-        </tr></thead>
-        <tbody>
-          {LEARNED_RULES.map((r, i) => (
-            <tr key={i}>
-              <td className="mono" style={{ fontWeight: 600, fontSize: 11.5 }}>{r.pattern}</td>
-              <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[r.cat] }}></span>{I18N[lang].categories[r.cat]}</span></td>
-              <td className="muted">{r.sub || "—"}</td>
-              <td className="r">
-                <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-                  <div className="pbar" style={{ width: 60 }}><div className="pbar-fill" style={{ width: (r.confidence * 100) + "%", background: r.confidence > 0.9 ? "var(--accent)" : "var(--warn)" }}></div></div>
-                  <span className="num" style={{ fontSize: 11, minWidth: 35 }}>{(r.confidence * 100).toFixed(0)}%</span>
-                </div>
-              </td>
-              <td className="r num muted">{r.seen}×</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-export function CategoriesPage({ lang }: { lang: Lang }) {
+export function CategoriesPage({ lang, hasData = false }: { lang: Lang; hasData?: boolean }) {
   const t = I18N[lang];
   return (
     <div className="page">
@@ -816,31 +715,45 @@ export function CategoriesPage({ lang }: { lang: Lang }) {
           <h1 className="page-title">{t.nav_categories}</h1>
           <div className="page-sub">{lang === "pt" ? "Regras automáticas + categorias personalizadas" : "Automatic rules + custom categories"}</div>
         </div>
-        <button className="btn primary sm"><Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova categoria" : "New category"}</button>
+        <button className="btn primary sm"
+          onClick={() => (window as any).__toast?.(lang === "pt" ? "Nova categoria manual: em breve" : "Custom category: coming soon", "warn")}>
+          <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova categoria" : "New category"}
+        </button>
       </div>
-      <LearnedRulesPanel lang={lang} />
-      <div className="grid g-3" style={{ gap: 14 }}>
-        {Object.keys(I18N[lang].categories).map((k) => {
-          const cur = CAT_MONTH.find((c) => c.k === k);
-          return (
-            <div key={k} className="card card-pad">
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <div style={{ width: 32, height: 32, borderRadius: 7, background: CAT_COLORS[k] || "var(--bg-3)", opacity: 0.15 }}></div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{I18N[lang].categories[k]}</div>
-                </div>
-              </div>
-              {cur && (
-                <>
-                  <div className="num" style={{ fontSize: 18, fontWeight: 600 }}>{fmtMoney(cur.cur, lang, true)}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 6 }}>{lang === "pt" ? "este mês" : "this month"}</div>
-                  <Sparkline data={[cur.prev * 0.8, cur.prev * 0.9, cur.prev, cur.prev * 1.1, cur.cur * 0.95, cur.cur]} w={240} h={28} color={CAT_COLORS[k]} />
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {hasData ? (
+        <div className="card">
+          <div className="card-head">
+            <h3 className="card-title">{lang === "pt" ? "Regras aprendidas" : "Learned rules"}</h3>
+            <span className="chip-sm">{LEARNED_RULES.length}</span>
+          </div>
+          <table className="t">
+            <thead><tr>
+              <th>{lang === "pt" ? "Padrão" : "Pattern"}</th>
+              <th>{lang === "pt" ? "Categoria" : "Category"}</th>
+              <th>{lang === "pt" ? "Subcategoria" : "Subcategory"}</th>
+              <th className="r">{lang === "pt" ? "Confiança" : "Confidence"}</th>
+              <th className="r">{lang === "pt" ? "Ocorrências" : "Seen"}</th>
+            </tr></thead>
+            <tbody>
+              {LEARNED_RULES.map((r, i) => (
+                <tr key={i}>
+                  <td className="mono" style={{ fontWeight: 500 }}>{r.pattern}</td>
+                  <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[r.cat] }}></span>{I18N[lang].categories[r.cat]}</span></td>
+                  <td className="muted">{r.sub ?? "—"}</td>
+                  <td className="r num">{(r.confidence * 100).toFixed(0)}%</td>
+                  <td className="r num muted">{r.seen}×</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState
+          icon="tag"
+          title={lang === "pt" ? "Nenhuma regra aprendida ainda" : "No learned rules yet"}
+          sub={lang === "pt" ? "As regras de categorização são criadas automaticamente ao importar e editar transações." : "Categorization rules are created automatically when you import and edit transactions."}
+        />
+      )}
     </div>
   );
 }
@@ -869,16 +782,19 @@ export function SettingsPage({ lang }: { lang: Lang }) {
           </div>
         </div>
         {[
-          { l: lang === "pt" ? "Senha mestra" : "Master password", s: lang === "pt" ? "Última alteração há 42 dias" : "Last changed 42 days ago", b: lang === "pt" ? "Alterar" : "Change" },
-          { l: lang === "pt" ? "Backup automático" : "Auto-backup", s: lang === "pt" ? "Diário · último: 04:00 hoje" : "Daily · last: 04:00 today", b: lang === "pt" ? "Configurar" : "Configure" },
-          { l: lang === "pt" ? "Localização do vault" : "Vault location", s: "~/finance-pro/vault.db", b: lang === "pt" ? "Mover" : "Move" },
+          { l: lang === "pt" ? "Senha mestra" : "Master password", s: lang === "pt" ? "Não configurada" : "Not configured", b: lang === "pt" ? "Configurar" : "Set up" },
+          { l: lang === "pt" ? "Backup automático" : "Auto-backup", s: lang === "pt" ? "Não configurado" : "Not configured", b: lang === "pt" ? "Configurar" : "Configure" },
+          { l: lang === "pt" ? "Localização do vault" : "Vault location", s: lang === "pt" ? "localStorage do navegador (temporário)" : "Browser localStorage (temporary)", b: lang === "pt" ? "Exportar" : "Export" },
         ].map((s, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", padding: "12px 0", borderTop: "1px solid var(--border)" }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 500 }}>{s.l}</div>
               <div style={{ fontSize: 11.5, color: "var(--ink-3)" }}>{s.s}</div>
             </div>
-            <button className="btn sm">{s.b}</button>
+            <button className="btn sm"
+              onClick={() => (window as any).__toast?.(lang === "pt" ? "Em breve" : "Coming soon", "warn")}>
+              {s.b}
+            </button>
           </div>
         ))}
       </div>

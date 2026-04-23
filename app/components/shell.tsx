@@ -71,7 +71,8 @@ export function Sidebar({ lang, route, setRoute }: SidebarProps) {
             <span className="mono">vault · local</span>
           </div>
         </div>
-        <button className="icon-btn" title={lang === "pt" ? "Sincronizar" : "Sync"}>
+        <button className="icon-btn" title={lang === "pt" ? "Sincronizar" : "Sync"}
+          onClick={() => (window as any).__toast?.(lang === "pt" ? "Sincronização em nuvem disponível em breve" : "Cloud sync coming soon", "info")}>
           <Icon name="refresh" style={{ width: 14, height: 14 }} className="" />
         </button>
       </div>
@@ -125,8 +126,10 @@ interface InsightCardProps {
   insight: Insight;
   lang: Lang;
   compact?: boolean;
+  onDismiss?: () => void;
+  onInvestigate?: () => void;
 }
-export function InsightCard({ insight, lang, compact = false }: InsightCardProps) {
+export function InsightCard({ insight, lang, compact = false, onDismiss, onInvestigate }: InsightCardProps) {
   const t = I18N[lang];
   const iconMap: Record<string, string> = { warn: "alert", pos: "trend", info: "sparkle", danger: "alert" };
   return (
@@ -144,8 +147,8 @@ export function InsightCard({ insight, lang, compact = false }: InsightCardProps
           <span>{insight.when}</span>
           {!compact && (
             <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              <button className="btn ghost sm">{t.dismiss}</button>
-              <button className="btn sm">{t.investigate}</button>
+              <button className="btn ghost sm" onClick={onDismiss}>{t.dismiss}</button>
+              <button className="btn sm" onClick={onInvestigate}>{t.investigate}</button>
             </div>
           )}
         </div>

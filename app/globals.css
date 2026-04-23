@@ -916,3 +916,29 @@ select.field { appearance: none; cursor: pointer; }
   color: var(--ink-3);
   margin-top: 1px;
 }
+
+/* ============ Import pipeline animations ============ */
+@keyframes pipe-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes pipe-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.step-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--bg-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+.pipe-cursor {
+  display: inline-block;
+  animation: pipe-blink 1s step-end infinite;
+}
