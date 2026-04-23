@@ -54,7 +54,8 @@ export function Sidebar({ lang, route, setRoute }: SidebarProps) {
         <NavItem icon="target" label={t.nav_budget} active={route === "budget"} onClick={() => setRoute("budget")} />
         <NavItem icon="tag" label={t.nav_categories} active={route === "categories"} onClick={() => setRoute("categories")} />
 
-        <div className="nav-sect" style={{ marginTop: 8 }}>{t.nav_tools}</div>
+        <div className="nav-sect" style={{ marginTop: 8 }}>{lang === "pt" ? "Análise" : "Analysis"}</div>
+        <NavItem icon="refresh" label={lang === "pt" ? "Comparar períodos" : "Compare periods"} active={route === "compare"} onClick={() => setRoute("compare")} />
         <NavItem icon="trend" label={t.nav_projection} active={route === "projection"} onClick={() => setRoute("projection")} />
         <NavItem icon="refresh" label={t.nav_recurring} active={route === "recurring"} onClick={() => setRoute("recurring")} />
         <NavItem icon="upload" label={t.nav_import} active={route === "import"} onClick={() => setRoute("import")} />

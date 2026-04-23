@@ -5,7 +5,7 @@ import { Sidebar, Topbar, TweaksPanel, AppState, type DashLayout } from "./compo
 import { Dashboard } from "./components/dashboard";
 import {
   AccountsPage, CardsPage, InvestPage, ImportPage,
-  InsightsPage, ReportsPage, BudgetPage, CategoriesPage, SettingsPage,
+  InsightsPage, ReportsPage, BudgetPage, CategoriesPage, SettingsPage, ComparisonPage,
 } from "./components/pages";
 import { EditDrawer, Toast, ProjectionPage, RecurringPage } from "./components/edit-drawer";
 import { Txn } from "./lib/data";
@@ -139,13 +139,14 @@ export default function Home() {
         {route === "accounts" && (
           <AccountsPage lang={state.lang} onEditTxn={setEditTxn} txns={txns} />
         )}
-        {route === "cards" && <CardsPage lang={state.lang} hasData={hasData} />}
-        {route === "invest" && <InvestPage lang={state.lang} hasData={hasData} />}
+        {route === "cards" && <CardsPage lang={state.lang} />}
+        {route === "invest" && <InvestPage lang={state.lang} />}
         {route === "import" && <ImportPage lang={state.lang} onImportComplete={handleImportComplete} />}
-        {route === "insights" && <InsightsPage lang={state.lang} hasData={hasData} />}
+        {route === "insights" && <InsightsPage lang={state.lang} />}
         {route === "reports" && <ReportsPage lang={state.lang} />}
         {route === "budget" && <BudgetPage lang={state.lang} />}
-        {route === "categories" && <CategoriesPage lang={state.lang} hasData={hasData} />}
+        {route === "categories" && <CategoriesPage lang={state.lang} />}
+        {route === "compare" && <ComparisonPage lang={state.lang} />}
         {route === "projection" && <ProjectionPage lang={state.lang} />}
         {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} />}
         {route === "settings" && <SettingsPage lang={state.lang} />}
