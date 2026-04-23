@@ -85,8 +85,9 @@ interface TopbarProps {
   privacy: boolean;
   setPrivacy: (p: boolean) => void;
   setRoute: (r: Route) => void;
+  onNewTxn?: () => void;
 }
-export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute }: TopbarProps) {
+export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn }: TopbarProps) {
   const t = I18N[lang];
   return (
     <header className="topbar">
@@ -111,7 +112,7 @@ export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute }: TopbarP
           <Icon name="upload" className="btn-icon" />
           <span>{t.import_doc}</span>
         </button>
-        <button className="btn primary sm">
+        <button className="btn primary sm" onClick={onNewTxn}>
           <Icon name="plus" className="btn-icon" />
           <span>{t.new_transaction}</span>
         </button>

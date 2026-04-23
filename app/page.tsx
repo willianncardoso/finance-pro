@@ -92,34 +92,33 @@ export default function Home() {
     <div className="app" data-palette={state.palette} data-density={state.density} data-privacy={state.privacy ? "on" : "off"}>
       <Sidebar lang={state.lang} route={route} setRoute={navigate} />
 
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, overflow: "hidden" }}>
-        <Topbar
-          lang={state.lang}
-          setLang={l => updateState({ lang: l })}
-          privacy={state.privacy}
-          setPrivacy={p => updateState({ privacy: p })}
-          setRoute={navigate}
-        />
+      <Topbar
+        lang={state.lang}
+        setLang={l => updateState({ lang: l })}
+        privacy={state.privacy}
+        setPrivacy={p => updateState({ privacy: p })}
+        setRoute={navigate}
+        onNewTxn={() => setEditTxn({ d: new Date().toISOString().slice(0, 10), merch: "", cat: "", acct: "", amt: 0 })}
+      />
 
-        <main className="main">
-          {route === "dashboard" && (
-            <Dashboard lang={state.lang} layout={state.layout} setLayout={l => updateState({ layout: l as DashLayout })} />
-          )}
-          {route === "accounts" && (
-            <AccountsPage lang={state.lang} onEditTxn={setEditTxn} />
-          )}
-          {route === "cards" && <CardsPage lang={state.lang} />}
-          {route === "invest" && <InvestPage lang={state.lang} />}
-          {route === "import" && <ImportPage lang={state.lang} />}
-          {route === "insights" && <InsightsPage lang={state.lang} />}
-          {route === "reports" && <ReportsPage lang={state.lang} />}
-          {route === "budget" && <BudgetPage lang={state.lang} />}
-          {route === "categories" && <CategoriesPage lang={state.lang} />}
-          {route === "projection" && <ProjectionPage lang={state.lang} />}
-          {route === "recurring" && <RecurringPage lang={state.lang} />}
-          {route === "settings" && <SettingsPage lang={state.lang} />}
-        </main>
-      </div>
+      <main className="main">
+        {route === "dashboard" && (
+          <Dashboard lang={state.lang} layout={state.layout} setLayout={l => updateState({ layout: l as DashLayout })} />
+        )}
+        {route === "accounts" && (
+          <AccountsPage lang={state.lang} onEditTxn={setEditTxn} />
+        )}
+        {route === "cards" && <CardsPage lang={state.lang} />}
+        {route === "invest" && <InvestPage lang={state.lang} />}
+        {route === "import" && <ImportPage lang={state.lang} />}
+        {route === "insights" && <InsightsPage lang={state.lang} />}
+        {route === "reports" && <ReportsPage lang={state.lang} />}
+        {route === "budget" && <BudgetPage lang={state.lang} />}
+        {route === "categories" && <CategoriesPage lang={state.lang} />}
+        {route === "projection" && <ProjectionPage lang={state.lang} />}
+        {route === "recurring" && <RecurringPage lang={state.lang} />}
+        {route === "settings" && <SettingsPage lang={state.lang} />}
+      </main>
 
       <button
         className="icon-btn"

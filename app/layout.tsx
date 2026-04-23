@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR" data-palette="graphite" data-density="high" data-privacy="off">
-      <body className={`${interTight.variable} ${jetbrainsMono.variable}`}>{children}</body>
+      <body className={`${interTight.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>{children}</body>
     </html>
   );
 }

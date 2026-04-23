@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Icon } from "./icons";
 import { KPI } from "./dashboard";
 import { InsightCard } from "./shell";
@@ -15,6 +15,7 @@ import {
 export function CardsPage({ lang }: { lang: Lang }) {
   const t = I18N[lang];
   const [selected, setSelected] = useState(CARDS[1]);
+  const [billTab, setBillTab] = useState<"current" | "open" | "previous">("current");
 
   const cardTxns: (Txn & { installment?: string | null })[] = [
     { d: "2026-04-16", merch: "Amazon Brasil", cat: "shopping", acct: "Itaú Click", amt: -489.00, installment: null },
@@ -134,32 +135,46 @@ export function CardsPage({ lang }: { lang: Lang }) {
           <h3 className="card-title">{lang === "pt" ? "Transações · " + selected.brand : "Transactions · " + selected.brand}</h3>
           <div className="card-actions">
             <div className="seg">
-              <button className="on">{lang === "pt" ? "Fatura atual" : "Current bill"}</button>
-              <button>{lang === "pt" ? "Aberta" : "Open"}</button>
-              <button>{lang === "pt" ? "Anterior" : "Previous"}</button>
+              <button className={billTab === "current" ? "on" : ""} onClick={() => setBillTab("current")}>{lang === "pt" ? "Fatura atual" : "Current bill"}</button>
+              <button className={billTab === "open" ? "on" : ""} onClick={() => setBillTab("open")}>{lang === "pt" ? "Aberta" : "Open"}</button>
+              <button className={billTab === "previous" ? "on" : ""} onClick={() => setBillTab("previous")}>{lang === "pt" ? "Anterior" : "Previous"}</button>
             </div>
           </div>
         </div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Data" : "Date"}</th>
-            <th>{lang === "pt" ? "Estabelecimento" : "Merchant"}</th>
-            <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-            <th>{lang === "pt" ? "Parcela" : "Installment"}</th>
-            <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
-          </tr></thead>
-          <tbody>
-            {cardTxns.map((tx, i) => (
-              <tr key={i}>
-                <td className="num muted">{fmtDate(tx.d, lang)}</td>
-                <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat]}</span></td>
-                <td className="mono muted" style={{ fontSize: 11 }}>{tx.installment || "—"}</td>
-                <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(tx.amt, lang)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {billTab === "current" ? (
+          <table className="t">
+            <thead><tr>
+              <th>{lang === "pt" ? "Data" : "Date"}</th>
+              <th>{lang === "pt" ? "Estabelecimento" : "Merchant"}</th>
+              <th>{lang === "pt" ? "Categoria" : "Category"}</th>
+              <th>{lang === "pt" ? "Parcela" : "Installment"}</th>
+              <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
+            </tr></thead>
+            <tbody>
+              {cardTxns.map((tx, i) => (
+                <tr key={i}>
+                  <td className="num muted">{fmtDate(tx.d, lang)}</td>
+                  <td style={{ fontWeight: 500 }}>{tx.merch}</td>
+                  <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat]}</span></td>
+                  <td className="mono muted" style={{ fontSize: 11 }}>{tx.installment || "—"}</td>
+                  <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(tx.amt, lang)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ padding: "48px 24px", textAlign: "center", color: "var(--ink-3)" }}>
+            <Icon name="file" style={{ width: 36, height: 36, stroke: "var(--ink-3)", strokeWidth: 1.2, marginBottom: 12 }} className="" />
+            <div style={{ fontSize: 14, fontWeight: 500, color: "var(--ink-2)", marginBottom: 6 }}>
+              {billTab === "open"
+                ? (lang === "pt" ? "Nenhuma transação na fatura aberta" : "No transactions in open bill")
+                : (lang === "pt" ? "Nenhuma transação na fatura anterior" : "No transactions in previous bill")}
+            </div>
+            <div style={{ fontSize: 12 }}>
+              {lang === "pt" ? "As transações aparecerão aqui quando disponíveis" : "Transactions will appear here when available"}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -303,6 +318,16 @@ export function ImportPage({ lang }: { lang: Lang }) {
   const t = I18N[lang];
   const [drag, setDrag] = useState(false);
   const [step, setStep] = useState(0);
+  const [fileName, setFileName] = useState("fatura_nubank_abr2026.pdf");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setStep(1);
+    e.target.value = "";
+  }
 
   const history = [
     { d: "2026-04-15", name: "fatura_nubank_abr2026.pdf", type: "PDF", bank: "Nubank", txns: 47, status: "done" },
@@ -323,11 +348,18 @@ export function ImportPage({ lang }: { lang: Lang }) {
 
       <div className="grid" style={{ gridTemplateColumns: "1.5fr 1fr", gap: 14, marginBottom: 14 }}>
         <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.ofx,.qfx,.xml,.csv,.png,.jpg,.jpeg"
+            style={{ display: "none" }}
+            onChange={handleFileSelect}
+          />
           <div className={"dz" + (drag ? " drag" : "")}
             onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
             onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); setStep(1); }}
-            onClick={() => setStep(1)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); const file = e.dataTransfer.files?.[0]; if (file) { setFileName(file.name); setStep(1); } }}
+            onClick={() => fileInputRef.current?.click()}
           >
             <Icon name="upload" style={{ width: 38, height: 38, stroke: "var(--ink-3)", strokeWidth: 1.3 }} className="" />
             <div style={{ fontSize: 16, fontWeight: 600, margin: "10px 0 4px" }}>
@@ -346,7 +378,7 @@ export function ImportPage({ lang }: { lang: Lang }) {
           {step >= 1 && (
             <div className="card" style={{ marginTop: 14 }}>
               <div className="card-head">
-                <h3 className="card-title">{lang === "pt" ? "Processando · fatura_nubank_abr2026.pdf" : "Processing · fatura_nubank_abr2026.pdf"}</h3>
+                <h3 className="card-title">{lang === "pt" ? `Processando · ${fileName}` : `Processing · ${fileName}`}</h3>
                 <button className="btn ghost sm" onClick={() => setStep(0)}><Icon name="x" className="btn-icon" /></button>
               </div>
               <div className="card-pad">
@@ -515,6 +547,7 @@ export function InsightsPage({ lang }: { lang: Lang }) {
 /* ============ REPORTS ============ */
 export function ReportsPage({ lang }: { lang: Lang }) {
   const t = I18N[lang];
+  const [period, setPeriod] = useState<"30d" | "90d" | "12m" | "ytd">("90d");
   return (
     <div className="page">
       <div className="page-head">
@@ -524,10 +557,10 @@ export function ReportsPage({ lang }: { lang: Lang }) {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <div className="seg">
-            <button>{t.last_30d}</button>
-            <button className="on">90d</button>
-            <button>{t.last_12m}</button>
-            <button>{t.ytd}</button>
+            <button className={period === "30d" ? "on" : ""} onClick={() => setPeriod("30d")}>{t.last_30d}</button>
+            <button className={period === "90d" ? "on" : ""} onClick={() => setPeriod("90d")}>90d</button>
+            <button className={period === "12m" ? "on" : ""} onClick={() => setPeriod("12m")}>{t.last_12m}</button>
+            <button className={period === "ytd" ? "on" : ""} onClick={() => setPeriod("ytd")}>{t.ytd}</button>
           </div>
           <button className="btn sm"><Icon name="download" className="btn-icon" />{lang === "pt" ? "Exportar" : "Export"}</button>
         </div>
