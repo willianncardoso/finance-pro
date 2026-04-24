@@ -601,7 +601,7 @@ function parseNubankCSV(content: string, acct = 'Nubank', sep = ',', hIdx = -1):
   const idxOf = (key: string) => headerCols.findIndex(c => c.includes(key));
   const iDate = idxOf('date') >= 0 ? idxOf('date') : idxOf('data') >= 0 ? idxOf('data') : 0;
   const iTitle = idxOf('title') >= 0 ? idxOf('title') : idxOf('titulo') >= 0 ? idxOf('titulo') : 2;
-  const iAmt = idxOf('amount') >= 0 ? idxOf('amount') : idxOf('valor') >= 0 ? idxOf('valor') : 3;
+  const iAmt = idxOf('amount') >= 0 ? idxOf('amount') : idxOf('valor') >= 0 ? idxOf('valor') : 2;
 
   const txns: Txn[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -616,6 +616,60 @@ function parseNubankCSV(content: string, acct = 'Nubank', sep = ',', hIdx = -1):
     const amt = -raw;
     const { cat, sub } = catFor(titulo, amt);
     txns.push({ id: newId(), d: dateStr, merch: titulo, cat, sub, acct, amt });
+  }
+  return txns.sort((a, b) => b.d.localeCompare(a.d));
+}
+
+/* ── C6 Fatura CSV parser (credit card bill) ────────────────────── */
+function parseC6FaturaCSV(content: string, acct = 'C6 Bank', sep = ';', hIdx = -1): Txn[] {
+  const lines = cleanLines(content);
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+
+  const headerIdx = hIdx >= 0 ? hIdx : lines.findIndex(l => {
+    const n = norm(l);
+    return n.includes('datacompra') || (n.includes('data') && n.includes('compra'));
+  });
+  if (headerIdx < 0) return [];
+
+  const headerCols = splitLine(lines[headerIdx], sep).map(c => norm(c));
+  const idxOf = (pred: (c: string) => boolean) => headerCols.findIndex(pred);
+
+  const colDate  = idxOf(c => c.includes('datacompra') || (c.includes('data') && !c.includes('cotacao')));
+  const colDesc  = idxOf(c => c.includes('descricao') || c.startsWith('descri'));
+  const colCat   = idxOf(c => c === 'categoria' || c.startsWith('categ'));
+  const colParc  = idxOf(c => c === 'parcela' || c.startsWith('parc'));
+  // Prefer "Valor (em R$)" → normalized "valoremr"; avoid US$ column
+  const colValor = (() => {
+    const i = idxOf(c => c.includes('valor') && c.includes('r') && !c.includes('us'));
+    return i >= 0 ? i : headerCols.length - 1;
+  })();
+
+  const txns: Txn[] = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const cols = splitLine(line, sep);
+    if (cols.length < 3) continue;
+
+    const dateStr = cols[colDate >= 0 ? colDate : 0]?.trim() ?? '';
+    const parts = dateStr.split('/');
+    if (parts.length !== 3) continue;
+    const d = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+
+    const descricao = cols[colDesc >= 0 ? colDesc : 4]?.trim() ?? '';
+    const categoria = cols[colCat >= 0 ? colCat : 3]?.trim() ?? '';
+    const parcela   = cols[colParc >= 0 ? colParc : 5]?.trim() ?? '';
+    const raw = parseBRLNum(cols[colValor] ?? '');
+    if (isNaN(raw) || raw === 0) continue;
+
+    // C6 Fatura: positive = expense → negate to app convention (expense = negative)
+    const amt = -raw;
+    const label = parcela && parcela !== 'Única' && parcela !== 'Unica'
+      ? `${descricao} (${parcela})`
+      : descricao;
+    const { cat, sub } = catFor(`${descricao} ${categoria}`, amt);
+    txns.push({ id: newId(), d, merch: label || descricao || 'C6', cat, sub, acct, amt });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -679,11 +733,14 @@ function parseFile(content: string, filename: string, acct?: string): { txns: Tx
   const { fmt, sep, headerIdx } = detectFormat(content, filename);
   const lines = cleanLines(content);
   const rawHeader = lines[headerIdx] ?? lines[0] ?? '';
-  const name = acct || (fmt === 'c6' ? 'C6 Bank' : fmt === 'nubank' ? 'Nubank' : 'Importado');
+  const nameMap: Partial<Record<CsvFormat, string>> = { c6: 'C6 Bank', c6fatura: 'C6 Bank', nubank: 'Nubank' };
+  const name = acct || nameMap[fmt] || 'Importado';
   let txns: Txn[];
-  if (fmt === 'nubank') txns = parseNubankCSV(content, name, sep, headerIdx);
+  if (fmt === 'numbers') txns = [];
+  else if (fmt === 'nubank') txns = parseNubankCSV(content, name, sep, headerIdx);
   else if (fmt === 'ofx') txns = parseOFX(content, name);
   else if (fmt === 'c6') txns = parseC6CSV(content, name, sep, headerIdx);
+  else if (fmt === 'c6fatura') txns = parseC6FaturaCSV(content, name, sep, headerIdx);
   else txns = parseGenericCSV(content, name, sep);
   return { txns, fmt, rawHeader };
 }
@@ -718,7 +775,19 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
       if (pipeStep === 1) {
         const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
         setDetectedFmt(fmt);
-        const fmtLabel: Record<CsvFormat, string> = { c6: 'C6 Bank CSV', nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV', ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV' };
+        const fmtLabel: Record<CsvFormat, string> = {
+          c6: 'C6 Bank Extrato CSV', c6fatura: 'C6 Bank Fatura CSV',
+          nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV',
+          ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
+        };
+        if (fmt === 'numbers') {
+          newLogs = pt
+            ? [`✗ Arquivo Apple Numbers detectado`, `  Exporte como CSV no Numbers: Arquivo → Exportar para → CSV`, `  Depois importe o arquivo .csv gerado`]
+            : [`✗ Apple Numbers file detected`, `  Export as CSV in Numbers: File → Export To → CSV`, `  Then import the generated .csv file`];
+          setLogs(prev => [...prev, ...newLogs]);
+          setPipeStep(0); // abort pipeline
+          return;
+        }
         const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
         newLogs = pt
           ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
@@ -770,7 +839,7 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
     if (pipeStep !== 4) return;
     setPipeStep(5);
     const count = parsedTxns.length;
-    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', generic: pt ? 'Genérico' : 'Generic' };
+    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', c6fatura: 'C6 Fatura', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', generic: pt ? 'Genérico' : 'Generic', numbers: 'Numbers' };
     setTimeout(() => {
       setLogs(prev => [...prev, ...(pt
         ? [`Mesclando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
