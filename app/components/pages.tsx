@@ -476,9 +476,25 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
 
 function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolean; lang: Lang; accent: string; last: boolean }) {
   const pt = lang === 'pt';
-  const excluded = (tx as any).exclude === true;
+  const excluded = tx.exclude === true;
+  const reimbPending = tx.reimbursable && !tx.reimburseReceived;
+  const reimbDone = tx.reimburseReceived === true;
   const avatarBg = accent === '#1a1a1a' ? 'var(--bg-3)' : accent + '20';
   const avatarColor = accent === '#1a1a1a' ? 'var(--ink-2)' : accent;
+
+  function handleQuickReceive(e: React.MouseEvent) {
+    e.stopPropagation();
+    const ra = tx.reimbAmt ?? Math.abs(tx.amt);
+    (window as any).__addTxn?.({
+      d: new Date().toISOString().slice(0, 10),
+      merch: (pt ? 'Reembolso · ' : 'Reimbursement · ') + tx.merch,
+      cat: 'income', sub: 'Reembolso',
+      acct: tx.acct, amt: ra,
+    });
+    (window as any).__updateTxn?.({ ...tx, reimbursable: undefined, reimburseReceived: true });
+    (window as any).__toast?.(pt ? `✓ Reembolso de ${fmtMoney(ra, lang)} registrado` : `✓ Reimbursement of ${fmtMoney(ra, lang)} recorded`);
+  }
+
   return (
     <div
       onClick={() => (window as any).__openTxnEdit?.(tx)}
@@ -503,6 +519,21 @@ function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolea
           {excluded && (
             <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-3)', borderRadius: 4, padding: '1px 5px', letterSpacing: '0.03em' }}>
               {pt ? 'excluído' : 'excluded'}
+            </span>
+          )}
+          {reimbPending && (
+            <button
+              onClick={handleQuickReceive}
+              title={pt ? 'Clique para marcar como recebido e registrar receita' : 'Click to mark as received and log income'}
+              style={{ fontSize: 10, fontWeight: 600, border: '1px solid #f59e0b60', borderRadius: 4, padding: '1px 6px',
+                background: '#f59e0b14', color: '#b45309', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}>
+              💸 {pt ? 'a receber' : 'pending'}{tx.reimbAmt ? ` ${fmtMoney(tx.reimbAmt, lang, true)}` : ''}
+            </button>
+          )}
+          {reimbDone && (
+            <span style={{ fontSize: 10, fontWeight: 600, border: '1px solid #22c55e50', borderRadius: 4, padding: '1px 6px',
+              background: '#22c55e12', color: '#16a34a', display: 'flex', alignItems: 'center', gap: 3 }}>
+              ✓ {pt ? 'reembolsado' : 'reimbursed'}
             </span>
           )}
         </div>

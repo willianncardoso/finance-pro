@@ -588,7 +588,10 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
   const [notes, setNotes] = useState(txn?.notes ?? "");
   const [recurring, setRecurring] = useState(txn?.recurring ?? false);
   const [exclude, setExclude] = useState(txn?.exclude ?? false);
-  const [reimbursable, setReimbursable] = useState(txn?.reimbursable ?? false);
+  const [reimbStage, setReimbStage] = useState<'none' | 'pending' | 'received'>(
+    txn?.reimburseReceived ? 'received' : txn?.reimbursable ? 'pending' : 'none'
+  );
+  const [reimbAmt, setReimbAmt] = useState(txn?.reimbAmt ? String(txn.reimbAmt) : "");
   const [learnRule, setLearnRule] = useState(true);
   const [split, setSplit] = useState(false);
   const [splitAmt, setSplitAmt] = useState("");
@@ -604,7 +607,8 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
       setNotes(txn.notes ?? "");
       setRecurring(txn.recurring ?? false);
       setExclude(txn.exclude ?? false);
-      setReimbursable(txn.reimbursable ?? false);
+      setReimbStage(txn.reimburseReceived ? 'received' : txn.reimbursable ? 'pending' : 'none');
+      setReimbAmt(txn.reimbAmt ? String(txn.reimbAmt) : "");
       setLearnRule(true);
       setSplit(false);
     }
@@ -618,7 +622,15 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
   if (!txn) return null;
 
   function handleSave() {
-    onSave({ ...txn!, cat, sub, merch, amt: txn!.amt < 0 ? -parseFloat(amt) : parseFloat(amt), notes, recurring, exclude, reimbursable });
+    const reimbAmt_ = parseFloat(reimbAmt);
+    onSave({
+      ...txn!, cat, sub, merch,
+      amt: txn!.amt < 0 ? -parseFloat(amt) : parseFloat(amt),
+      notes, recurring, exclude,
+      reimbursable: reimbStage === 'pending' || undefined,
+      reimburseReceived: reimbStage === 'received' || undefined,
+      reimbAmt: reimbStage !== 'none' && !isNaN(reimbAmt_) && reimbAmt_ > 0 ? reimbAmt_ : undefined,
+    });
     onClose();
   }
 
@@ -734,7 +746,6 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
               {([
                 { key: "recurring", val: recurring, set: setRecurring, label: lang === "pt" ? "Recorrente" : "Recurring", sub: lang === "pt" ? "Adicionar à lista de recorrentes" : "Add to recurring list" },
                 { key: "exclude", val: exclude, set: setExclude, label: lang === "pt" ? "Excluir de relatórios" : "Exclude from reports", sub: lang === "pt" ? "Não contar nas estatísticas" : "Don't count in statistics" },
-                { key: "reimbursable", val: reimbursable, set: setReimbursable, label: lang === "pt" ? "Reembolsável" : "Reimbursable", sub: lang === "pt" ? "Aguardando devolução" : "Awaiting reimbursement" },
               ] as const).map(f => (
                 <div key={f.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div>
@@ -744,6 +755,54 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
                   <button className={"toggle" + (f.val ? " on" : "")} onClick={() => (f.set as (v: boolean) => void)(!f.val)} />
                 </div>
               ))}
+
+              {/* Reimbursable — 3-stage */}
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: reimbStage !== 'none' ? 8 : 0 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 500 }}>{lang === "pt" ? "Reembolsável" : "Reimbursable"}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      {reimbStage === 'none' && (lang === "pt" ? "Nenhum" : "None")}
+                      {reimbStage === 'pending' && (lang === "pt" ? "Aguardando devolução" : "Awaiting reimbursement")}
+                      {reimbStage === 'received' && (lang === "pt" ? "Reembolso recebido" : "Reimbursement received")}
+                    </div>
+                  </div>
+                  <div className="seg" style={{ fontSize: 11 }}>
+                    {([
+                      { k: 'none', l: lang === 'pt' ? 'Nenhum' : 'None' },
+                      { k: 'pending', l: lang === 'pt' ? 'A receber' : 'Pending' },
+                      { k: 'received', l: lang === 'pt' ? 'Recebido' : 'Received' },
+                    ] as const).map(o => (
+                      <button key={o.k} className={reimbStage === o.k ? 'on' : ''} onClick={() => setReimbStage(o.k)}>{o.l}</button>
+                    ))}
+                  </div>
+                </div>
+                {reimbStage !== 'none' && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ flex: 1 }}>
+                      <label className="field-label">{lang === "pt" ? "Valor a reembolsar (opcional)" : "Amount to reimburse (optional)"}</label>
+                      <input className="field mono" placeholder={`${Math.abs(parseFloat(amt) || 0).toFixed(2)}`}
+                        value={reimbAmt} onChange={e => setReimbAmt(e.target.value)} />
+                    </div>
+                    {reimbStage === 'pending' && (
+                      <button className="btn sm" style={{ marginTop: 18, flexShrink: 0 }}
+                        onClick={() => {
+                          const ra = parseFloat(reimbAmt) || Math.abs(parseFloat(amt) || txn!.amt);
+                          (window as any).__addTxn?.({
+                            d: new Date().toISOString().slice(0, 10),
+                            merch: (lang === 'pt' ? 'Reembolso · ' : 'Reimbursement · ') + merch,
+                            cat: 'income', sub: 'Reembolso',
+                            acct: txn!.acct, amt: ra,
+                          });
+                          setReimbStage('received');
+                          (window as any).__toast?.(lang === 'pt' ? `✓ Reembolso de ${fmtMoney(ra, lang)} registrado` : `✓ Reimbursement of ${fmtMoney(ra, lang)} recorded`);
+                        }}>
+                        {lang === 'pt' ? '+ Adicionar receita' : '+ Add income'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

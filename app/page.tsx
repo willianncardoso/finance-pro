@@ -221,6 +221,17 @@ export default function Home() {
       setTxns(prev => [withId, ...prev]);
     };
 
+    // Update an existing transaction in-place (for quick actions like reimburse)
+    (window as any).__updateTxn = (txn: Txn) => {
+      setTxns(prev => {
+        const idx = prev.findIndex(t => t.id === txn.id);
+        if (idx < 0) return prev;
+        const next = [...prev];
+        next[idx] = txn;
+        return next;
+      });
+    };
+
     // Vault file system
     (window as any).__vaultSave = async () => {
       const pt = state.lang === "pt";
@@ -271,6 +282,7 @@ export default function Home() {
       delete (window as any).__modal;
       delete (window as any).__togglePrivacy;
       delete (window as any).__addTxn;
+      delete (window as any).__updateTxn;
       delete (window as any).__vaultSave;
       delete (window as any).__vaultNew;
       delete (window as any).__vaultOpen;

@@ -259,7 +259,7 @@ export function acctBRL(a: Account): number {
   return a.balance ?? 0;
 }
 export interface Card { id: string; brand: string; last4: string; limit: number; used: number; close: number; due: number; variant: string; color: string; }
-export interface Txn { id?: string; d: string; merch: string; cat: string; acct: string; amt: number; sub?: string; recurring?: boolean; exclude?: boolean; reimbursable?: boolean; notes?: string; installment?: string | null; kind?: 'card' | 'account'; }
+export interface Txn { id?: string; d: string; merch: string; cat: string; acct: string; amt: number; sub?: string; recurring?: boolean; exclude?: boolean; reimbursable?: boolean; reimburseReceived?: boolean; reimbAmt?: number; notes?: string; installment?: string | null; kind?: 'card' | 'account'; }
 export function newId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; }
 export interface Insight { kind: "warn" | "danger" | "pos" | "info"; t: string; x: string; tag: string; when: string; }
 export interface CatMonth { k: string; cur: number; prev: number; budget: number; }
