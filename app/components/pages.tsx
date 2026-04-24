@@ -97,13 +97,12 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const pt = lang === 'pt';
 
-  // Only show credit card transactions; fall back to all if none tagged
+  // Only credit card transactions; fall back gracefully if none tagged yet
   const cardTxns = txns.filter(tx => tx.kind === 'card');
   const effective = cardTxns.length > 0 ? cardTxns : txns.filter(tx => tx.kind !== 'account');
 
   const months = availableMonths(effective);
-  // '' = all months (default); user can filter down to a specific month
-  const [selMonth, setSelMonth] = useState('');
+  const [selMonth, setSelMonth] = useState('');   // '' = all months
   const [selAcct, setSelAcct] = useState('all');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
@@ -113,55 +112,77 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
-          <div className="page-sub">{pt ? "Nenhuma fatura importada" : "No card statements imported"}</div>
+          <div className="page-sub">{pt ? 'Nenhuma fatura importada' : 'No card statements imported'}</div>
         </div>
-        <button className="btn primary sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{pt ? "Importar fatura" : "Import statement"}
+        <button className="btn primary sm" onClick={() => (window as any).__navigate?.('import')}>
+          <Icon name="upload" className="btn-icon" />{pt ? 'Importar fatura' : 'Import statement'}
         </button>
       </div>
       <EmptyState
         icon="card"
-        title={pt ? "Nenhuma fatura ainda" : "No statements yet"}
-        sub={pt ? "Importe uma fatura CSV do C6 ou Nubank para ver seus gastos aqui." : "Import a C6 or Nubank CSV statement to see your card spending here."}
-        cta={pt ? "Importar fatura" : "Import statement"}
-        onCta={() => (window as any).__navigate?.("import")}
+        title={pt ? 'Nenhuma fatura ainda' : 'No statements yet'}
+        sub={pt ? 'Importe uma fatura CSV do C6 ou Nubank para ver seus gastos aqui.' : 'Import a C6 or Nubank CSV statement to see your card spending here.'}
+        cta={pt ? 'Importar fatura' : 'Import statement'}
+        onCta={() => (window as any).__navigate?.('import')}
       />
     </div>
   );
 
-  // All unique accounts in card txns
   const allAccts = [...new Set(effective.map(tx => tx.acct))].sort();
 
-  // Filtered pipeline
+  // Filter pipeline
   const inMonth = selMonth ? effective.filter(tx => tx.d.startsWith(selMonth)) : effective;
-  const inAcct = selAcct === 'all' ? inMonth : inMonth.filter(tx => tx.acct === selAcct);
-  const searched = search
-    ? inAcct.filter(tx => tx.merch.toLowerCase().includes(search.toLowerCase()) || (tx.cat + (tx.sub ?? '')).toLowerCase().includes(search.toLowerCase()))
+  const inAcct  = selAcct === 'all' ? inMonth : inMonth.filter(tx => tx.acct === selAcct);
+  const searched = search.trim()
+    ? inAcct.filter(tx =>
+        tx.merch.toLowerCase().includes(search.toLowerCase()) ||
+        (I18N[lang].categories[tx.cat] ?? tx.cat).toLowerCase().includes(search.toLowerCase())
+      )
     : inAcct;
+  // Sort: by date desc normally; by amount desc when user selects amount
   const filtered = [...searched].sort((a, b) =>
-    sortBy === 'amount' ? Math.abs(a.amt) - Math.abs(b.amt) : b.d.localeCompare(a.d)
+    sortBy === 'amount' ? Math.abs(b.amt) - Math.abs(a.amt) : b.d.localeCompare(a.d)
   );
 
-  // Per-account summary for selected month
+  // Per-account totals (based on month + account filter applied so far at inMonth level)
   const acctSummary = allAccts.map(name => {
     const rows = inMonth.filter(tx => tx.acct === name);
     const expense = rows.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
-    const income = rows.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
-    const count = rows.length;
-    return { name, expense, income, net: expense - income, count };
+    const income  = rows.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
+    return { name, expense, income, count: rows.length };
   }).filter(a => a.count > 0).sort((a, b) => b.expense - a.expense);
 
+  // Totals reflect the full filter (month + account + search)
   const totalExpense = filtered.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
-  const totalIncome = filtered.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
+  const totalIncome  = filtered.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
 
-  // Category breakdown
+  // Category breakdown — based on month + account selection (ignores search so chart stays stable)
   const byCat: Record<string, number> = {};
   inAcct.filter(tx => tx.amt < 0).forEach(tx => { byCat[tx.cat] = (byCat[tx.cat] ?? 0) + Math.abs(tx.amt); });
-  const catBreakdown = Object.entries(byCat).map(([k, v]) => ({ k, cur: v, prev: 0, budget: 0 })).sort((a, b) => b.cur - a.cur);
+  const catBreakdown = Object.entries(byCat)
+    .map(([k, v]) => ({ k, cur: v, prev: 0, budget: 0 }))
+    .sort((a, b) => b.cur - a.cur);
+
+  // Month navigation helpers (months sorted desc: newest first)
+  const mIdx = months.indexOf(selMonth);
+  const goOlder = () => { // ‹
+    if (!selMonth) setSelMonth(months[0]);           // "all" → most recent
+    else if (mIdx < months.length - 1) setSelMonth(months[mIdx + 1]);
+  };
+  const goNewer = () => { // ›
+    if (!selMonth) return;
+    if (mIdx > 0) setSelMonth(months[mIdx - 1]);
+    else setSelMonth('');                             // oldest specific → back to "all"
+  };
+  const olderDisabled = selMonth ? mIdx >= months.length - 1 : false;
+  const newerDisabled = !selMonth;
+
+  const clearFilters = () => { setSearch(''); setSelAcct('all'); setSelMonth(''); };
+  const hasFilters = search || selAcct !== 'all' || selMonth;
 
   return (
     <div className="page">
-      {/* Header */}
+      {/* ── Header ─────────────────────────────────────────────────── */}
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
@@ -170,33 +191,30 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
             {selMonth ? ` · ${monthLabel(selMonth, lang)}` : ` · ${pt ? 'todos os meses' : 'all months'}`}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {/* Month nav arrows */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Month navigator */}
+          <div style={{ display: 'flex', alignItems: 'center', height: 34, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
             <button
               className="btn ghost sm"
-              style={{ borderRadius: 0, borderRight: '1px solid var(--border)', padding: '0 10px', height: 32 }}
-              disabled={!selMonth || months.indexOf(selMonth) >= months.length - 1}
-              onClick={() => {
-                if (!selMonth) { setSelMonth(months[months.length - 1]); return; }
-                const i = months.indexOf(selMonth);
-                if (i < months.length - 1) setSelMonth(months[i + 1]);
-              }}
+              style={{ borderRadius: 0, borderRight: '1px solid var(--border)', padding: '0 11px', height: '100%', fontSize: 16, lineHeight: 1 }}
+              disabled={olderDisabled}
+              onClick={goOlder}
+              title={pt ? 'Mês anterior' : 'Previous month'}
             >‹</button>
-            <select value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{ border: 'none', background: 'transparent', fontSize: 12, fontWeight: 500, padding: '0 8px', height: 32, cursor: 'pointer', color: 'var(--ink)' }}>
+            <select
+              value={selMonth}
+              onChange={e => setSelMonth(e.target.value)}
+              style={{ border: 'none', background: 'transparent', fontSize: 12, fontWeight: 600, padding: '0 8px', height: '100%', cursor: 'pointer', color: 'var(--ink)', minWidth: 130 }}
+            >
               <option value="">{pt ? 'Todos os meses' : 'All months'}</option>
               {months.map(m => <option key={m} value={m}>{monthLabel(m, lang)}</option>)}
             </select>
             <button
               className="btn ghost sm"
-              style={{ borderRadius: 0, borderLeft: '1px solid var(--border)', padding: '0 10px', height: 32 }}
-              disabled={selMonth === months[0]}
-              onClick={() => {
-                if (!selMonth) { setSelMonth(months[0]); return; }
-                const i = months.indexOf(selMonth);
-                if (i > 0) setSelMonth(months[i - 1]);
-                else setSelMonth('');
-              }}
+              style={{ borderRadius: 0, borderLeft: '1px solid var(--border)', padding: '0 11px', height: '100%', fontSize: 16, lineHeight: 1 }}
+              disabled={newerDisabled}
+              onClick={goNewer}
+              title={pt ? 'Próximo mês' : 'Next month'}
             >›</button>
           </div>
           <button className="btn primary sm" onClick={() => (window as any).__navigate?.('import')}>
@@ -205,100 +223,114 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
         </div>
       </div>
 
-      {/* Card chips — one per account */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 18, overflowX: 'auto', paddingBottom: 4 }}>
-        {/* All */}
+      {/* ── Stats row ──────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+        <div className="card card-pad" style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Total gasto' : 'Total spent'}</div>
+          <div className="num neg privacy-mask" style={{ fontSize: 24, fontWeight: 700 }}>{fmtMoney(totalExpense, lang, true)}</div>
+          {selMonth && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 4 }}>{monthLabel(selMonth, lang)}</div>}
+        </div>
+        {totalIncome > 0 && (
+          <div className="card card-pad" style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Créditos / estornos' : 'Credits / refunds'}</div>
+            <div className="num pos privacy-mask" style={{ fontSize: 24, fontWeight: 700 }}>+{fmtMoney(totalIncome, lang, true)}</div>
+          </div>
+        )}
+        <div className="card card-pad" style={{ flex: 1 }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Transações' : 'Transactions'}</div>
+          <div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{filtered.length}</div>
+          {search && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 4 }}>{pt ? 'filtradas' : 'filtered'}</div>}
+        </div>
+      </div>
+
+      {/* ── Card chips ─────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
+        {/* All-cards chip */}
         <div
+          role="button"
+          tabIndex={0}
           onClick={() => setSelAcct('all')}
+          onKeyDown={e => e.key === 'Enter' && setSelAcct('all')}
           style={{
-            flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 150,
+            flexShrink: 0, cursor: 'pointer', borderRadius: 12, padding: '12px 16px', minWidth: 140,
             background: selAcct === 'all' ? 'var(--ink)' : 'var(--surface)',
-            border: `1.5px solid ${selAcct === 'all' ? 'var(--ink)' : 'var(--border)'}`,
+            border: `1.5px solid ${selAcct === 'all' ? 'transparent' : 'var(--border)'}`,
             color: selAcct === 'all' ? 'var(--surface)' : 'var(--ink)',
-            transition: 'background 0.15s, border-color 0.15s',
+            userSelect: 'none',
           }}
         >
-          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', opacity: 0.65, textTransform: 'uppercase', marginBottom: 8 }}>{pt ? 'Todos' : 'All cards'}</div>
-          <div className="num privacy-mask" style={{ fontSize: 20, fontWeight: 700 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', opacity: 0.6, textTransform: 'uppercase', marginBottom: 6 }}>{pt ? 'Todos' : 'All'}</div>
+          <div className="num privacy-mask" style={{ fontSize: 18, fontWeight: 700 }}>
             {fmtMoney(acctSummary.reduce((s, a) => s + a.expense, 0), lang, true)}
           </div>
-          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 3 }}>
-            {acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'transações' : 'transactions'}
+          <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
+            {acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'tx' : 'tx'}
           </div>
         </div>
+
         {acctSummary.map(a => {
           const accent = cardAccent(a.name);
           const active = selAcct === a.name;
           return (
             <div
               key={a.name}
+              role="button"
+              tabIndex={0}
               onClick={() => setSelAcct(active ? 'all' : a.name)}
+              onKeyDown={e => e.key === 'Enter' && setSelAcct(active ? 'all' : a.name)}
               style={{
-                flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 185,
+                flexShrink: 0, cursor: 'pointer', borderRadius: 12, padding: '12px 16px', minWidth: 175,
                 background: active ? accent : 'var(--surface)',
-                border: `1.5px solid ${active ? accent : 'var(--border)'}`,
+                border: `1.5px solid ${active ? 'transparent' : 'var(--border)'}`,
                 color: active ? '#fff' : 'var(--ink)',
-                transition: 'background 0.15s, border-color 0.15s',
+                userSelect: 'none',
               }}
             >
-              <div style={{ fontSize: 11, fontWeight: 600, opacity: active ? 0.8 : 1, marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
-              <div className="num privacy-mask" style={{ fontSize: 20, fontWeight: 700 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: active ? 0.9 : 1 }}>{a.name}</div>
+              <div className="num privacy-mask" style={{ fontSize: 18, fontWeight: 700 }}>
                 {fmtMoney(a.expense, lang, true)}
               </div>
               {a.income > 0 && (
-                <div style={{ fontSize: 10, opacity: 0.75, marginTop: 2 }}>
-                  estornos +{fmtMoney(a.income, lang, true)}
+                <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>
+                  +{fmtMoney(a.income, lang, true)} {pt ? 'estornos' : 'refunds'}
                 </div>
               )}
-              <div style={{ fontSize: 11, opacity: 0.6, marginTop: 3 }}>
-                {a.count} {pt ? 'transações' : 'transactions'}
+              <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
+                {a.count} {pt ? 'tx' : 'tx'}
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Summary row + category bars */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 14, marginBottom: 14 }}>
-        <div className="card">
+      {/* ── Category breakdown ─────────────────────────────────────── */}
+      {catBreakdown.length > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
           <div className="card-head">
             <h3 className="card-title">{pt ? 'Gastos por categoria' : 'Spending by category'}</h3>
-            {selAcct !== 'all' && <span className="chip-sm" style={{ background: cardAccent(selAcct), color: '#fff' }}>{selAcct}</span>}
+            <span className="chip-sm">
+              {selAcct !== 'all' ? selAcct : selMonth ? monthLabel(selMonth, lang) : pt ? 'todos' : 'all'}
+            </span>
           </div>
           <div className="card-pad">
-            {catBreakdown.length > 0
-              ? <BarList items={catBreakdown.slice(0, 8)} lang={lang} />
-              : <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>{pt ? 'Sem gastos neste período' : 'No expenses in this period'}</div>}
+            <BarList items={catBreakdown.slice(0, 10)} lang={lang} />
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 170 }}>
-          <div className="card card-pad">
-            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Total gasto' : 'Total spent'}</div>
-            <div className="num neg privacy-mask" style={{ fontSize: 22, fontWeight: 700 }}>{fmtMoney(totalExpense, lang, true)}</div>
-          </div>
-          {totalIncome > 0 && (
-            <div className="card card-pad">
-              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Créditos' : 'Credits'}</div>
-              <div className="num pos privacy-mask" style={{ fontSize: 22, fontWeight: 700 }}>+{fmtMoney(totalIncome, lang, true)}</div>
-            </div>
-          )}
-          <div className="card card-pad">
-            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Transações' : 'Transactions'}</div>
-            <div className="num" style={{ fontSize: 22, fontWeight: 700 }}>{filtered.length}</div>
-          </div>
-        </div>
-      </div>
+      )}
 
-      {/* Filter bar */}
+      {/* ── Filter bar ─────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
-          <Icon name="search" style={{ width: 13, height: 13, position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', stroke: 'var(--ink-3)' }} className="" />
+          <Icon name="search" style={{ width: 13, height: 13, position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', stroke: 'var(--ink-3)', pointerEvents: 'none' }} className="" />
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder={pt ? 'Buscar estabelecimento ou categoria…' : 'Search merchant or category…'}
-            style={{ width: '100%', paddingLeft: 30, paddingRight: 10, height: 34, border: '1px solid var(--border-2)', borderRadius: 8, fontSize: 13, background: 'var(--bg-2)', color: 'var(--ink)', boxSizing: 'border-box' }}
+            style={{ width: '100%', paddingLeft: 30, paddingRight: search ? 30 : 10, height: 34, border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, background: 'var(--bg-2)', color: 'var(--ink)', boxSizing: 'border-box' }}
           />
+          {search && (
+            <button onClick={() => setSearch('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+          )}
         </div>
         <select
           value={sortBy}
@@ -306,76 +338,97 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           className="field"
           style={{ height: 34, fontSize: 12, padding: '0 10px', flexShrink: 0 }}
         >
-          <option value="date">{pt ? 'Ordenar: data' : 'Sort: date'}</option>
-          <option value="amount">{pt ? 'Ordenar: valor' : 'Sort: amount'}</option>
+          <option value="date">{pt ? 'Mais recente' : 'Most recent'}</option>
+          <option value="amount">{pt ? 'Maior valor' : 'Highest amount'}</option>
         </select>
-        {(search || selAcct !== 'all') && (
-          <button className="btn ghost sm" onClick={() => { setSearch(''); setSelAcct('all'); }}>
+        {hasFilters && (
+          <button className="btn ghost sm" onClick={clearFilters}>
             {pt ? 'Limpar filtros' : 'Clear filters'}
           </button>
         )}
       </div>
 
-      {/* Transactions list — grouped by date */}
+      {/* ── Transactions ───────────────────────────────────────────── */}
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{pt ? 'Transações' : 'Transactions'}</h3>
-          <span className="chip-sm">{filtered.length}</span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {hasFilters && <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{pt ? 'filtrado' : 'filtered'}</span>}
+            <span className="chip-sm">{filtered.length}</span>
+          </div>
         </div>
         {filtered.length === 0 ? (
-          <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
-            {pt ? 'Nenhuma transação encontrada' : 'No transactions found'}
-          </div>
-        ) : (() => {
-          // Group by date for display
-          const byDate: { date: string; rows: typeof filtered }[] = [];
-          filtered.forEach(tx => {
-            const last = byDate[byDate.length - 1];
-            if (last && last.date === tx.d) last.rows.push(tx);
-            else byDate.push({ date: tx.d, rows: [tx] });
-          });
-          return (
-            <div>
-              {byDate.map(({ date, rows }) => (
-                <div key={date}>
-                  <div style={{ padding: '8px 16px', fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-2)', borderBottom: '1px solid var(--border)', letterSpacing: '0.03em', textTransform: 'uppercase' }}>
-                    {fmtDate(date, lang)}
-                  </div>
-                  {rows.map((tx, ri) => (
-                    <div
-                      key={tx.id ?? ri}
-                      onClick={() => (window as any).__openTxnEdit?.(tx)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: ri < rows.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}
-                    >
-                      {/* Merchant avatar */}
-                      <div style={{ width: 36, height: 36, borderRadius: 10, background: cardAccent(tx.acct) + '22', display: 'grid', placeItems: 'center', flexShrink: 0, fontSize: 13, fontWeight: 700, color: cardAccent(tx.acct) }}>
-                        {tx.merch.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '?'}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.merch}</div>
-                        <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
-                          <span className="pill" style={{ fontSize: 10 }}>
-                            <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
-                            {I18N[lang].categories[tx.cat] ?? tx.cat}
-                          </span>
-                          {allAccts.length > 1 && (
-                            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{tx.acct}</span>
-                          )}
-                          {tx.installment && (
-                            <span style={{ fontSize: 10, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>{tx.installment}</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className={"num " + (tx.amt > 0 ? 'pos' : '')} style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
-                        {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ))}
+          <div style={{ padding: '40px 16px', textAlign: 'center' }}>
+            <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 12 }}>
+              {pt ? 'Nenhuma transação encontrada' : 'No transactions found'}
             </div>
-          );
-        })()}
+            {hasFilters && (
+              <button className="btn ghost sm" onClick={clearFilters}>{pt ? 'Limpar filtros' : 'Clear filters'}</button>
+            )}
+          </div>
+        ) : sortBy === 'amount' ? (
+          /* Flat list when sorted by amount */
+          <div>
+            {filtered.map((tx, i) => (
+              <TxRow key={tx.id ?? i} tx={tx} showAcct={allAccts.length > 1} lang={lang} accent={cardAccent(tx.acct)} last={i === filtered.length - 1} />
+            ))}
+          </div>
+        ) : (
+          /* Grouped by date when sorted by date */
+          (() => {
+            const byDate: { date: string; rows: typeof filtered }[] = [];
+            filtered.forEach(tx => {
+              const last = byDate[byDate.length - 1];
+              if (last && last.date === tx.d) last.rows.push(tx);
+              else byDate.push({ date: tx.d, rows: [tx] });
+            });
+            return (
+              <div>
+                {byDate.map(({ date, rows }, gi) => (
+                  <div key={date} style={{ borderTop: gi > 0 ? '1px solid var(--border)' : 'none' }}>
+                    <div style={{ padding: '6px 16px 6px', fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-2)', letterSpacing: '0.04em' }}>
+                      {new Date(date + 'T12:00:00').toLocaleDateString(pt ? 'pt-BR' : 'en-US', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    </div>
+                    {rows.map((tx, ri) => (
+                      <TxRow key={tx.id ?? ri} tx={tx} showAcct={allAccts.length > 1} lang={lang} accent={cardAccent(tx.acct)} last={ri === rows.length - 1} />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            );
+          })()
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolean; lang: Lang; accent: string; last: boolean }) {
+  const pt = lang === 'pt';
+  // Use a neutral tint for the avatar that works in both light and dark mode
+  const avatarBg = accent === '#1a1a1a' ? 'var(--bg-3)' : accent + '20';
+  const avatarColor = accent === '#1a1a1a' ? 'var(--ink-2)' : accent;
+  return (
+    <div
+      onClick={() => (window as any).__openTxnEdit?.(tx)}
+      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: last ? 'none' : '1px solid var(--border)', cursor: 'pointer' }}
+    >
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: avatarBg, display: 'grid', placeItems: 'center', flexShrink: 0, fontSize: 12, fontWeight: 700, color: avatarColor }}>
+        {tx.merch.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '?'}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.merch}</div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="pill" style={{ fontSize: 10 }}>
+            <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
+            {I18N[lang].categories[tx.cat] ?? tx.cat}
+          </span>
+          {showAcct && <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{tx.acct}</span>}
+          {tx.installment && <span style={{ fontSize: 10, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>{tx.installment}</span>}
+        </div>
+      </div>
+      <div className={'num' + (tx.amt > 0 ? ' pos' : '')} style={{ fontWeight: 700, fontSize: 14, flexShrink: 0, color: tx.amt > 0 ? 'var(--pos)' : 'var(--ink)' }}>
+        {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
       </div>
     </div>
   );
