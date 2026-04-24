@@ -291,7 +291,7 @@ export default function Home() {
 
       <main className="main">
         {route === "dashboard" && (
-          <Dashboard lang={state.lang} layout={state.layout} setLayout={l => updateState({ layout: l as DashLayout })} hasData={hasData} />
+          <Dashboard lang={state.lang} layout={state.layout} setLayout={l => updateState({ layout: l as DashLayout })} hasData={hasData} txns={txns} />
         )}
         {route === "accounts" && (
           <AccountsPage lang={state.lang} onEditTxn={setEditTxn} txns={txns} />

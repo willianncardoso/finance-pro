@@ -4,9 +4,78 @@ import { Icon } from "./icons";
 import { Sparkline, CashflowChart, DonutChart, BarList, DailyChart, FXBar } from "./charts";
 import { InsightCard } from "./shell";
 import {
-  I18N, Lang, fmtMoney, fmtDate, acctBRL,
-  CASHFLOW_12M, ACCOUNTS, CARDS, TXNS, INSIGHTS, CAT_MONTH, PORTFOLIO, GOALS, UPCOMING, DAILY_30D, NARRATIVE, CAT_COLORS,
+  I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn,
 } from "../lib/data";
+
+/* ─── Stats derived from real txns ──────────────────────────────── */
+
+function computeStats(txns: Txn[]) {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ym = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  const thisM = ym(now);
+  const prevM = ym(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+
+  const thisMo = txns.filter(t => t.d.startsWith(thisM));
+  const prevMo = txns.filter(t => t.d.startsWith(prevM));
+
+  const income = thisMo.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
+  const expense = Math.abs(thisMo.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
+  const prevIncome = prevMo.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
+  const prevExpense = Math.abs(prevMo.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
+
+  const byCat: Record<string, number> = {};
+  const prevByCat: Record<string, number> = {};
+  thisMo.filter(t => t.amt < 0 && t.cat).forEach(t => { byCat[t.cat] = (byCat[t.cat] || 0) + Math.abs(t.amt); });
+  prevMo.filter(t => t.amt < 0 && t.cat).forEach(t => { prevByCat[t.cat] = (prevByCat[t.cat] || 0) + Math.abs(t.amt); });
+
+  const catSummary = Object.entries(byCat)
+    .map(([k, cur]) => ({ k, cur, prev: prevByCat[k] || 0, budget: 0 }))
+    .sort((a, b) => b.cur - a.cur);
+
+  // Cashflow last 12 months
+  const byMonth: Record<string, { income: number; expense: number }> = {};
+  txns.forEach(t => {
+    const m = t.d.slice(0, 7);
+    if (!byMonth[m]) byMonth[m] = { income: 0, expense: 0 };
+    if (t.amt > 0) byMonth[m].income += t.amt;
+    else byMonth[m].expense += Math.abs(t.amt);
+  });
+  const cashflow = Object.entries(byMonth)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([, v], i) => ({ m: i + 1, income: v.income, expense: v.expense }));
+
+  // Accounts derived from txns
+  const acctMap: Record<string, number> = {};
+  txns.forEach(t => { acctMap[t.acct] = (acctMap[t.acct] ?? 0) + t.amt; });
+  const accounts = Object.entries(acctMap)
+    .map(([name, balance]) => ({ name, balance }))
+    .sort((a, b) => b.balance - a.balance);
+
+  // Daily spend last 30 days
+  const daily: number[] = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const s = d.toISOString().slice(0, 10);
+    daily.push(txns.filter(t => t.d === s && t.amt < 0).reduce((sum, t) => sum + Math.abs(t.amt), 0));
+  }
+
+  const topCat = catSummary[0]?.k ?? null;
+  const net = income - expense;
+  const savingsRate = income > 0 ? (net / income) * 100 : 0;
+
+  return { income, expense, prevIncome, prevExpense, net, savingsRate, catSummary, cashflow, topCat, accounts, daily };
+}
+
+function pctDelta(curr: number, prev: number) {
+  if (prev === 0) return null;
+  const pct = ((curr - prev) / prev) * 100;
+  return { pos: pct >= 0, text: `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%` };
+}
+
+/* ─── KPI card ───────────────────────────────────────────────────── */
 
 interface KPIProps {
   label: string;
@@ -44,39 +113,45 @@ export function KPI({ label, value, delta, sub, spark, sparkColor, icon, privacy
   );
 }
 
-function KPIRow({ lang }: { lang: Lang }) {
-  const t = I18N[lang];
-  const spark1 = [280, 285, 292, 298, 305, 308, 312, 318, 325, 331, 338, 342];
-  const spark2 = [45, 52, 48, 55, 62, 58, 60, 65, 68, 64, 70, 75];
-  const spark3 = [180, 195, 210, 225, 240, 255, 268, 272, 278, 280, 282, 284];
-  const spark4 = [12, 14, 13, 15, 18, 16, 17, 20, 22, 19, 21, 23];
+/* ─── Shared empty micro-state ───────────────────────────────────── */
+
+function MiniEmpty({ icon, label }: { icon: string; label: string }) {
   return (
-    <div className="grid g-4">
-      <KPI icon="dollar" label={t.kpi_networth} value={fmtMoney(342157, lang, true)} delta={{ pos: true, text: "+R$ 8.240 (2.5%)" }} sub={t.vs_last_month} spark={spark1} sparkColor="var(--accent)" />
-      <KPI icon="wallet" label={t.kpi_cash} value={fmtMoney(77716, lang, true)} delta={{ pos: false, text: "−R$ 3.120 (3.8%)" }} sub={t.vs_last_month} spark={spark2} sparkColor="var(--ink-3)" />
-      <KPI icon="trend" label={t.kpi_invest} value={fmtMoney(284510, lang, true)} delta={{ pos: true, text: "+R$ 11.340 (4.1%)" }} sub={t.vs_last_month} spark={spark3} sparkColor="var(--info)" />
-      <KPI icon="card" label={t.kpi_debt} value={fmtMoney(29011, lang, true)} delta={{ pos: false, text: "+R$ 5.920 (25.6%)" }} sub={t.vs_last_month} spark={spark4} sparkColor="var(--warn)" />
+    <div style={{ padding: "24px 16px", textAlign: "center" }}>
+      <Icon name={icon} style={{ width: 28, height: 28, stroke: "var(--ink-4)", strokeWidth: 1.2, marginBottom: 8 }} className="" />
+      <div style={{ fontSize: 12, color: "var(--ink-4)" }}>{label}</div>
     </div>
   );
 }
 
-function DashboardClassic({ lang }: { lang: Lang }) {
+/* ─── Dashboard Classic ──────────────────────────────────────────── */
+
+function DashboardClassic({ lang, txns }: { lang: Lang; txns: Txn[] }) {
   const t = I18N[lang];
+  const s = computeStats(txns);
+  const incomeSpark = s.cashflow.map(c => c.income);
+  const expSpark = s.cashflow.map(c => c.expense);
+  const sorted = [...txns].sort((a, b) => b.d.localeCompare(a.d));
+
+  // Simple real insights from stats
+  const insights = [];
+  if (s.income > 0 && s.expense > s.income) insights.push({ kind: "warn" as const, t: lang === "pt" ? "Gastos acima da receita" : "Expenses exceed income", x: lang === "pt" ? `Você gastou ${fmtMoney(s.expense - s.income, lang, true)} a mais do que recebeu neste mês.` : `You spent ${fmtMoney(s.expense - s.income, lang, true)} more than you earned this month.`, tag: lang === "pt" ? "Atenção" : "Warning", when: lang === "pt" ? "Este mês" : "This month" });
+  if (s.topCat) insights.push({ kind: "info" as const, t: lang === "pt" ? `Principal gasto: ${I18N[lang].categories[s.topCat]}` : `Top spend: ${I18N[lang].categories[s.topCat]}`, x: lang === "pt" ? `${I18N[lang].categories[s.topCat]} é a categoria com maior gasto este mês (${fmtMoney(s.catSummary[0]?.cur ?? 0, lang, true)}).` : `${I18N[lang].categories[s.topCat]} is your top expense category this month (${fmtMoney(s.catSummary[0]?.cur ?? 0, lang, true)}).`, tag: lang === "pt" ? "Categoria" : "Category", when: lang === "pt" ? "Este mês" : "This month" });
+  if (s.savingsRate > 0) insights.push({ kind: "pos" as const, t: lang === "pt" ? `Taxa de poupança: ${s.savingsRate.toFixed(0)}%` : `Savings rate: ${s.savingsRate.toFixed(0)}%`, x: lang === "pt" ? "Você está poupando parte da sua renda este mês. Continue assim!" : "You are saving a portion of your income this month. Keep it up!", tag: lang === "pt" ? "Poupança" : "Savings", when: lang === "pt" ? "Este mês" : "This month" });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <KPIRow lang={lang} />
+      <div className="grid g-4">
+        <KPI icon="dollar" label={t.kpi_month_income} value={fmtMoney(s.income, lang, true)} delta={pctDelta(s.income, s.prevIncome)} sub={t.vs_last_month} spark={incomeSpark} sparkColor="var(--accent)" />
+        <KPI icon="wallet" label={t.kpi_month_expense} value={fmtMoney(s.expense, lang, true)} delta={s.prevExpense > 0 ? { pos: s.expense <= s.prevExpense, text: `${s.expense <= s.prevExpense ? "" : "+"}${(((s.expense - s.prevExpense) / s.prevExpense) * 100).toFixed(1)}%` } : null} sub={t.vs_last_month} spark={expSpark} sparkColor="var(--ink-3)" />
+        <KPI icon="trend" label={t.kpi_savings_rate} value={s.income > 0 ? s.savingsRate.toFixed(1) + "%" : "—"} delta={null} sub={lang === "pt" ? "do salário poupado" : "of income saved"} privacyMask={false} />
+        <KPI icon="card" label={lang === "pt" ? "Saldo líquido" : "Net cash"} value={fmtMoney(s.net, lang, true)} delta={null} sub={lang === "pt" ? "receita − despesa" : "income − expense"} sparkColor="var(--warn)" />
+      </div>
+
       <div className="grid" style={{ gridTemplateColumns: "1.8fr 1fr", gap: 14 }}>
         <div className="card">
           <div className="card-head">
             <h3 className="card-title">{t.section_cashflow}</h3>
-            <div className="card-actions">
-              <div className="seg">
-                <button className="on">{t.last_12m}</button>
-                <button>6m</button>
-                <button>3m</button>
-              </div>
-              <button className="icon-btn"><Icon name="download" style={{ width: 13, height: 13 }} className="" /></button>
-            </div>
           </div>
           <div className="card-pad">
             <div style={{ display: "flex", alignItems: "center", gap: 18, marginBottom: 10, fontSize: 11 }}>
@@ -89,7 +164,7 @@ function DashboardClassic({ lang }: { lang: Lang }) {
                 <span className="muted">{lang === "pt" ? "Gastos" : "Expense"}</span>
               </span>
             </div>
-            <CashflowChart data={CASHFLOW_12M} lang={lang} />
+            {s.cashflow.length > 0 ? <CashflowChart data={s.cashflow} lang={lang} /> : <MiniEmpty icon="trend" label={lang === "pt" ? "Sem dados de cashflow" : "No cashflow data"} />}
           </div>
         </div>
         <div className="card" style={{ display: "flex", flexDirection: "column" }}>
@@ -98,15 +173,14 @@ function DashboardClassic({ lang }: { lang: Lang }) {
               <Icon name="sparkle" style={{ width: 12, height: 12, verticalAlign: "middle", marginRight: 4 }} className="" />
               {t.section_insights}
             </h3>
-            <span className="pill accent">8 {lang === "pt" ? "novos" : "new"}</span>
           </div>
           <div style={{ flex: 1, overflow: "auto", maxHeight: 410 }}>
-            {INSIGHTS[lang].slice(0, 4).map((ins, i) => (
-              <InsightCard key={i} insight={ins} lang={lang} compact />
-            ))}
+            {insights.length > 0
+              ? insights.map((ins, i) => <InsightCard key={i} insight={ins} lang={lang} compact />)
+              : <MiniEmpty icon="sparkle" label={lang === "pt" ? "Nenhum insight disponível" : "No insights yet"} />}
           </div>
           <div style={{ padding: 10, borderTop: "1px solid var(--border)", textAlign: "center" }}>
-            <button className="btn ghost sm" style={{ width: "100%" }}>{t.view_all} →</button>
+            <button className="btn ghost sm" style={{ width: "100%" }} onClick={() => (window as any).__navigate?.("insights")}>{t.view_all} →</button>
           </div>
         </div>
       </div>
@@ -118,27 +192,28 @@ function DashboardClassic({ lang }: { lang: Lang }) {
             <span className="chip-sm">{t.this_month}</span>
           </div>
           <div className="card-pad">
-            <BarList items={CAT_MONTH.slice(0, 7)} lang={lang} />
+            {s.catSummary.length > 0
+              ? <BarList items={s.catSummary.slice(0, 7)} lang={lang} />
+              : <MiniEmpty icon="tag" label={lang === "pt" ? "Sem gastos este mês" : "No expenses this month"} />}
           </div>
         </div>
         <div className="card">
           <div className="card-head">
             <h3 className="card-title">{t.section_accounts}</h3>
-            <button className="btn ghost sm">{t.view_all}</button>
+            <button className="btn ghost sm" onClick={() => (window as any).__navigate?.("accounts")}>{t.view_all}</button>
           </div>
           <div>
-            {ACCOUNTS.map((a) => (
-              <div key={a.id} style={{ padding: "11px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 28, height: 28, borderRadius: 6, background: a.color, display: "grid", placeItems: "center", color: "white", fontSize: 10, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                  {a.name.split(" ")[0].slice(0, 2).toUpperCase()}
+            {s.accounts.length > 0 ? s.accounts.map((a, i) => (
+              <div key={i} style={{ padding: "11px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: "var(--bg-3)", display: "grid", placeItems: "center", fontSize: 10, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                  {a.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
-                  <div style={{ fontSize: 10.5, color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{a.type} · {a.number}</div>
                 </div>
-                <div className="num" style={{ fontSize: 12.5, fontWeight: 600 }}>{fmtMoney(acctBRL(a), lang, true)}</div>
+                <div className={"num " + (a.balance >= 0 ? "" : "neg")} style={{ fontSize: 12.5, fontWeight: 600 }}>{fmtMoney(a.balance, lang, true)}</div>
               </div>
-            ))}
+            )) : <MiniEmpty icon="wallet" label={lang === "pt" ? "Nenhuma conta" : "No accounts"} />}
           </div>
         </div>
         <div className="card">
@@ -146,111 +221,67 @@ function DashboardClassic({ lang }: { lang: Lang }) {
             <h3 className="card-title">{t.section_upcoming}</h3>
             <span className="chip-sm">30d</span>
           </div>
-          <div>
-            {UPCOMING.map((u, i) => (
-              <div key={i} style={{ padding: "11px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ minWidth: 42 }}>
-                  <div className="mono" style={{ fontSize: 16, fontWeight: 600, lineHeight: 1 }}>{new Date(u.d).getDate()}</div>
-                  <div className="mono" style={{ fontSize: 9, color: "var(--ink-3)", textTransform: "uppercase" }}>{I18N[lang].months[new Date(u.d).getMonth()]}</div>
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.merch}</div>
-                  <div style={{ fontSize: 10.5, display: "flex", alignItems: "center", gap: 6 }}>
-                    <span className="cat-dot" style={{ background: CAT_COLORS[u.cat] }}></span>
-                    <span className="muted">{I18N[lang].categories[u.cat]}</span>
-                    {u.warn && <span className="pill warn" style={{ marginLeft: "auto" }}>!</span>}
-                  </div>
-                </div>
-                <div className="num neg" style={{ fontSize: 12.5, fontWeight: 600 }}>{fmtMoney(u.amt, lang, true)}</div>
-              </div>
-            ))}
-          </div>
+          <MiniEmpty icon="clock" label={lang === "pt" ? "Recorrentes: em breve" : "Recurring: coming soon"} />
         </div>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "1.6fr 1fr", gap: 14 }}>
-        <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{t.section_recent}</h3>
-            <div className="card-actions">
-              <button className="btn ghost sm"><Icon name="filter" className="btn-icon" />{lang === "pt" ? "Filtrar" : "Filter"}</button>
-              <button className="btn ghost sm">{t.view_all}</button>
-            </div>
-          </div>
-          <table className="t">
-            <thead><tr>
-              <th>{lang === "pt" ? "Data" : "Date"}</th>
-              <th>{lang === "pt" ? "Descrição" : "Description"}</th>
-              <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-              <th>{lang === "pt" ? "Conta" : "Account"}</th>
-              <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
-            </tr></thead>
-            <tbody>
-              {TXNS.slice(0, 10).map((tx, i) => (
-                <tr key={i} onClick={() => { if (typeof window !== "undefined" && window.__openTxnEdit) window.__openTxnEdit(tx); }} style={{ cursor: "pointer" }}>
-                  <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
-                  <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                  <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat]}</span></td>
-                  <td className="muted" style={{ fontSize: 11.5 }}>{tx.acct}</td>
-                  <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
-                    {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{t.section_portfolio}</h3>
-            <span className="pill accent">+4.1% {t.this_month}</span>
-          </div>
-          <div className="card-pad" style={{ display: "flex", gap: 18, alignItems: "center" }}>
-            <DonutChart data={[
-              { v: 68000, color: "oklch(0.55 0.14 155)", label: "Ações" },
-              { v: 89000, color: "oklch(0.55 0.14 220)", label: "Renda fixa" },
-              { v: 45000, color: "oklch(0.65 0.15 30)", label: "ETF" },
-              { v: 82000, color: "oklch(0.5 0.1 280)", label: "Tesouro" },
-            ]} />
-            <div style={{ flex: 1 }}>
-              <div className="num" style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-0.02em" }}>{fmtMoney(284510, lang, true)}</div>
-              <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 10 }}>{lang === "pt" ? "valor total" : "total value"}</div>
-              {[
-                { c: "oklch(0.55 0.14 155)", l: lang === "pt" ? "Ações" : "Equities", v: "23.9%" },
-                { c: "oklch(0.55 0.14 220)", l: "CDB/LCI", v: "31.3%" },
-                { c: "oklch(0.65 0.15 30)", l: "ETF", v: "15.8%" },
-                { c: "oklch(0.5 0.1 280)", l: "Tesouro", v: "28.8%" },
-              ].map((p, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, padding: "3px 0" }}>
-                  <span style={{ width: 8, height: 8, background: p.c, borderRadius: 2 }}></span>
-                  <span>{p.l}</span>
-                  <span className="num" style={{ marginLeft: "auto", color: "var(--ink-2)" }}>{p.v}</span>
-                </div>
-              ))}
-            </div>
+      <div className="card">
+        <div className="card-head">
+          <h3 className="card-title">{t.section_recent}</h3>
+          <div className="card-actions">
+            <button className="btn ghost sm"><Icon name="filter" className="btn-icon" />{lang === "pt" ? "Filtrar" : "Filter"}</button>
+            <button className="btn ghost sm" onClick={() => (window as any).__navigate?.("accounts")}>{t.view_all}</button>
           </div>
         </div>
+        <table className="t">
+          <thead><tr>
+            <th>{lang === "pt" ? "Data" : "Date"}</th>
+            <th>{lang === "pt" ? "Descrição" : "Description"}</th>
+            <th>{lang === "pt" ? "Categoria" : "Category"}</th>
+            <th>{lang === "pt" ? "Conta" : "Account"}</th>
+            <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
+          </tr></thead>
+          <tbody>
+            {sorted.slice(0, 10).map((tx, i) => (
+              <tr key={i} onClick={() => (window as any).__openTxnEdit?.(tx)} style={{ cursor: "pointer" }}>
+                <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
+                <td style={{ fontWeight: 500 }}>{tx.merch}</td>
+                <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat] ?? tx.cat}</span></td>
+                <td className="muted" style={{ fontSize: 11.5 }}>{tx.acct}</td>
+                <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
+                  {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
 
-function DashboardCommand({ lang }: { lang: Lang }) {
+/* ─── Dashboard Command ──────────────────────────────────────────── */
+
+function DashboardCommand({ lang, txns }: { lang: Lang; txns: Txn[] }) {
   const t = I18N[lang];
+  const s = computeStats(txns);
+  const sorted = [...txns].sort((a, b) => b.d.localeCompare(a.d));
+  const dailyMax = s.daily.length > 0 ? Math.max(...s.daily) : 1;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div className="grid g-4" style={{ gap: 10 }}>
         {[
-          { l: t.kpi_networth, v: fmtMoney(342157, lang, true), d: "+2.5%", p: true },
-          { l: t.kpi_month_income, v: fmtMoney(18927, lang, true), d: "+2.3%", p: true },
-          { l: t.kpi_month_expense, v: fmtMoney(17240, lang, true), d: "+22.3%", p: false },
-          { l: t.kpi_savings_rate, v: "8.9%", d: "-12.4%", p: false },
+          { l: t.kpi_month_income, v: fmtMoney(s.income, lang, true), d: s.prevIncome > 0 ? pctDelta(s.income, s.prevIncome) : null },
+          { l: t.kpi_month_expense, v: fmtMoney(s.expense, lang, true), d: s.prevExpense > 0 ? pctDelta(s.expense, s.prevExpense) : null },
+          { l: lang === "pt" ? "Saldo líquido" : "Net cash", v: fmtMoney(s.net, lang, true), d: null },
+          { l: t.kpi_savings_rate, v: s.income > 0 ? s.savingsRate.toFixed(1) + "%" : "—", d: null },
         ].map((k, i) => (
           <div key={i} className="card" style={{ padding: "10px 14px" }}>
             <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ink-3)", fontWeight: 600 }}>{k.l}</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 3 }}>
-              <span className="num" style={{ fontSize: 18, fontWeight: 600 }}>{k.v}</span>
-              <span className={"num " + (k.p ? "pos" : "neg")} style={{ fontSize: 11 }}>{k.d}</span>
+              <span className="num privacy-mask" style={{ fontSize: 18, fontWeight: 600 }}>{k.v}</span>
+              {k.d && <span className={"num " + (k.d.pos ? "pos" : "neg")} style={{ fontSize: 11 }}>{k.d.text}</span>}
             </div>
           </div>
         ))}
@@ -258,68 +289,37 @@ function DashboardCommand({ lang }: { lang: Lang }) {
 
       <FXBar lang={lang} />
 
-      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+      <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <div className="card">
           <div className="card-head" style={{ padding: "8px 14px" }}>
             <h3 className="card-title" style={{ fontSize: 10.5 }}>{t.section_accounts}</h3>
-            <span className="chip-sm">{ACCOUNTS.length}</span>
+            <span className="chip-sm">{s.accounts.length}</span>
           </div>
-          <table className="t">
-            <tbody>
-              {ACCOUNTS.map((a) => (
-                <tr key={a.id}>
-                  <td style={{ fontSize: 11.5 }}>
-                    <span style={{ width: 6, height: 6, background: a.color, borderRadius: "50%", display: "inline-block", marginRight: 6 }}></span>
-                    {a.name}
-                  </td>
-                  <td className="r num" style={{ fontSize: 11.5 }}>{fmtMoney(acctBRL(a), lang, true)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="card">
-          <div className="card-head" style={{ padding: "8px 14px" }}>
-            <h3 className="card-title" style={{ fontSize: 10.5 }}>{t.section_cards}</h3>
-            <span className="chip-sm">{CARDS.length}</span>
-          </div>
-          <table className="t">
-            <tbody>
-              {CARDS.map((c) => {
-                const pct = (c.used / c.limit) * 100;
-                return (
-                  <tr key={c.id}>
-                    <td style={{ fontSize: 11.5 }}>{c.brand}<span className="muted mono" style={{ marginLeft: 6, fontSize: 10 }}>*{c.last4}</span></td>
-                    <td style={{ width: 60 }}>
-                      <div className="pbar" style={{ height: 4 }}><div className="pbar-fill" style={{ width: pct + "%", background: pct > 70 ? "var(--warn)" : "var(--ink-2)" }}></div></div>
-                    </td>
-                    <td className="r num" style={{ fontSize: 11.5 }}>{fmtMoney(c.used, lang, true)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="card">
-          <div className="card-head" style={{ padding: "8px 14px" }}>
-            <h3 className="card-title" style={{ fontSize: 10.5 }}>{t.section_portfolio}</h3>
-            <span className="pill accent" style={{ fontSize: 10 }}>+4.1%</span>
-          </div>
-          <table className="t">
-            <thead><tr><th>Ativo</th><th className="r">Qtd</th><th className="r">P/L</th></tr></thead>
-            <tbody>
-              {PORTFOLIO.slice(0, 6).map((p, i) => {
-                const pnl = (p.last - p.pm) / p.pm * 100;
-                return (
+          {s.accounts.length > 0 ? (
+            <table className="t">
+              <tbody>
+                {s.accounts.map((a, i) => (
                   <tr key={i}>
-                    <td className="mono" style={{ fontSize: 11.5, fontWeight: 600 }}>{p.t}</td>
-                    <td className="r num" style={{ fontSize: 11 }}>{p.q > 1 ? p.q : "—"}</td>
-                    <td className={"r num " + (pnl >= 0 ? "pos" : "neg")} style={{ fontSize: 11 }}>{pnl > 0 ? "+" : ""}{pnl.toFixed(1)}%</td>
+                    <td style={{ fontSize: 11.5 }}>
+                      <span style={{ width: 6, height: 6, background: "var(--ink-3)", borderRadius: "50%", display: "inline-block", marginRight: 6 }}></span>
+                      {a.name}
+                    </td>
+                    <td className={"r num " + (a.balance >= 0 ? "" : "neg")} style={{ fontSize: 11.5 }}>{fmtMoney(a.balance, lang, true)}</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          ) : <MiniEmpty icon="wallet" label={lang === "pt" ? "Nenhuma conta" : "No accounts"} />}
+        </div>
+        <div className="card">
+          <div className="card-head" style={{ padding: "8px 14px" }}>
+            <h3 className="card-title" style={{ fontSize: 10.5 }}>{t.section_categories}</h3>
+          </div>
+          <div style={{ padding: "10px 14px" }}>
+            {s.catSummary.length > 0
+              ? <BarList items={s.catSummary.slice(0, 6)} lang={lang} />
+              : <MiniEmpty icon="tag" label={lang === "pt" ? "Sem gastos este mês" : "No expenses this month"} />}
+          </div>
         </div>
       </div>
 
@@ -327,19 +327,19 @@ function DashboardCommand({ lang }: { lang: Lang }) {
         <div className="card">
           <div className="card-head" style={{ padding: "8px 14px" }}>
             <h3 className="card-title" style={{ fontSize: 10.5 }}>{lang === "pt" ? "Gastos diários · 30 dias" : "Daily spend · 30d"}</h3>
-            <span className="chip-sm">max: {fmtMoney(890, lang)}</span>
+            {dailyMax > 0 && <span className="chip-sm">max: {fmtMoney(dailyMax, lang)}</span>}
           </div>
           <div style={{ padding: "10px 14px" }}>
-            <DailyChart data={DAILY_30D} color="var(--ink)" />
+            {s.daily.some(v => v > 0)
+              ? <DailyChart data={s.daily} color="var(--ink)" />
+              : <MiniEmpty icon="trend" label={lang === "pt" ? "Sem gastos nos últimos 30 dias" : "No spend in the last 30 days"} />}
           </div>
         </div>
         <div className="card">
           <div className="card-head" style={{ padding: "8px 14px" }}>
-            <h3 className="card-title" style={{ fontSize: 10.5 }}>{t.section_categories}</h3>
+            <h3 className="card-title" style={{ fontSize: 10.5 }}>{t.section_portfolio}</h3>
           </div>
-          <div style={{ padding: "10px 14px" }}>
-            <BarList items={CAT_MONTH.slice(0, 6)} lang={lang} />
-          </div>
+          <MiniEmpty icon="trend" label={lang === "pt" ? "Portfólio: em breve" : "Portfolio: coming soon"} />
         </div>
       </div>
 
@@ -356,11 +356,11 @@ function DashboardCommand({ lang }: { lang: Lang }) {
             <th className="r" style={{ width: 110 }}>{lang === "pt" ? "Valor" : "Amount"}</th>
           </tr></thead>
           <tbody>
-            {TXNS.map((tx, i) => (
-              <tr key={i} onClick={() => { if (typeof window !== "undefined" && window.__openTxnEdit) window.__openTxnEdit(tx); }} style={{ cursor: "pointer" }}>
+            {sorted.slice(0, 15).map((tx, i) => (
+              <tr key={i} onClick={() => (window as any).__openTxnEdit?.(tx)} style={{ cursor: "pointer" }}>
                 <td className="num muted" style={{ fontSize: 11 }}>{fmtDate(tx.d, lang)}</td>
                 <td style={{ fontSize: 11.5 }}>{tx.merch}</td>
-                <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat]}</span></td>
+                <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }}></span>{I18N[lang].categories[tx.cat] ?? tx.cat}</span></td>
                 <td className="muted" style={{ fontSize: 11 }}>{tx.acct}</td>
                 <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontSize: 11.5, fontWeight: 600 }}>
                   {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
@@ -374,13 +374,35 @@ function DashboardCommand({ lang }: { lang: Lang }) {
   );
 }
 
-function DashboardNarrative({ lang }: { lang: Lang }) {
+/* ─── Dashboard Narrative ────────────────────────────────────────── */
+
+function DashboardNarrative({ lang, txns }: { lang: Lang; txns: Txn[] }) {
   const t = I18N[lang];
-  const narrative = NARRATIVE[lang];
-  const lines = narrative.split("\n");
+  const s = computeStats(txns);
+  const pt = lang === "pt";
+
+  const insights = [];
+  if (s.income > 0 && s.expense > s.income) insights.push({ kind: "warn" as const, t: pt ? "Gastos acima da receita" : "Expenses exceed income", x: pt ? `Você gastou ${fmtMoney(s.expense - s.income, lang, true)} a mais do que recebeu neste mês.` : `You spent ${fmtMoney(s.expense - s.income, lang, true)} more than you earned this month.`, tag: pt ? "Atenção" : "Warning", when: pt ? "Este mês" : "This month" });
+  if (s.topCat) insights.push({ kind: "info" as const, t: pt ? `Principal: ${I18N[lang].categories[s.topCat]}` : `Top: ${I18N[lang].categories[s.topCat]}`, x: pt ? `${I18N[lang].categories[s.topCat]} é a categoria com maior gasto este mês.` : `${I18N[lang].categories[s.topCat]} is your top expense category this month.`, tag: pt ? "Categoria" : "Category", when: pt ? "Este mês" : "This month" });
+  if (s.savingsRate > 0) insights.push({ kind: "pos" as const, t: pt ? `Poupança: ${s.savingsRate.toFixed(0)}%` : `Savings: ${s.savingsRate.toFixed(0)}%`, x: pt ? "Você está poupando parte da sua renda este mês." : "You are saving a portion of your income this month.", tag: pt ? "Poupança" : "Savings", when: pt ? "Este mês" : "This month" });
+
+  const narrativeSummary = s.income > 0
+    ? pt
+      ? `Em **${new Date().toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}**, você recebeu **${fmtMoney(s.income, lang, true)}** e gastou **${fmtMoney(s.expense, lang, true)}**, resultando em um saldo líquido de **${fmtMoney(s.net, lang, true)}**.\n\nTaxa de poupança: **${s.savingsRate.toFixed(1)}%**${s.topCat ? `. Maior gasto: **${I18N[lang].categories[s.topCat]}** (${fmtMoney(s.catSummary[0]?.cur ?? 0, lang, true)})` : ""}.`
+      : `In **${new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })}**, you earned **${fmtMoney(s.income, lang, true)}** and spent **${fmtMoney(s.expense, lang, true)}**, resulting in a net balance of **${fmtMoney(s.net, lang, true)}**.\n\nSavings rate: **${s.savingsRate.toFixed(1)}%**${s.topCat ? `. Top expense: **${I18N[lang].categories[s.topCat]}** (${fmtMoney(s.catSummary[0]?.cur ?? 0, lang, true)})` : ""}.`
+    : pt ? "Importe suas transações para ver a análise automática do seu mês." : "Import your transactions to see an automatic analysis of your month.";
+
+  const lines = narrativeSummary.split("\n");
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <KPIRow lang={lang} />
+      <div className="grid g-4">
+        <KPI icon="dollar" label={t.kpi_month_income} value={fmtMoney(s.income, lang, true)} delta={pctDelta(s.income, s.prevIncome)} sub={t.vs_last_month} spark={s.cashflow.map(c => c.income)} sparkColor="var(--accent)" />
+        <KPI icon="wallet" label={t.kpi_month_expense} value={fmtMoney(s.expense, lang, true)} delta={s.prevExpense > 0 ? { pos: s.expense <= s.prevExpense, text: `${s.expense <= s.prevExpense ? "" : "+"}${(((s.expense - s.prevExpense) / s.prevExpense) * 100).toFixed(1)}%` } : null} sub={t.vs_last_month} spark={s.cashflow.map(c => c.expense)} sparkColor="var(--ink-3)" />
+        <KPI icon="trend" label={t.kpi_savings_rate} value={s.income > 0 ? s.savingsRate.toFixed(1) + "%" : "—"} delta={null} sub={lang === "pt" ? "do salário poupado" : "of income saved"} privacyMask={false} />
+        <KPI icon="card" label={lang === "pt" ? "Saldo líquido" : "Net cash"} value={fmtMoney(s.net, lang, true)} delta={null} sub={lang === "pt" ? "receita − despesa" : "income − expense"} />
+      </div>
+
       <div className="card" style={{ background: "var(--ink)", color: "var(--bg)", border: "none", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: -40, right: -40, width: 200, height: 200, background: "radial-gradient(circle, var(--accent) 0%, transparent 70%)", opacity: 0.25 }}></div>
         <div style={{ padding: "22px 26px", display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 32, position: "relative" }}>
@@ -388,7 +410,7 @@ function DashboardNarrative({ lang }: { lang: Lang }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
               <Icon name="sparkle" style={{ width: 14, height: 14 }} className="" />
               <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.12em", opacity: 0.7 }}>
-                {lang === "pt" ? "Análise automática · abril/2026" : "Auto-analysis · April 2026"}
+                {pt ? "Análise automática" : "Auto-analysis"} · {new Date().toLocaleDateString(pt ? "pt-BR" : "en-US", { month: "long", year: "numeric" })}
               </span>
             </div>
             <h2 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.02em", margin: "0 0 14px", lineHeight: 1.2 }}>
@@ -410,27 +432,24 @@ function DashboardNarrative({ lang }: { lang: Lang }) {
           </div>
           <div>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.12em", opacity: 0.7, marginBottom: 14 }}>
-              {lang === "pt" ? "Ações sugeridas" : "Suggested actions"}
+              {pt ? "Distribuição de gastos" : "Expense breakdown"}
             </div>
-            {[
-              { t: lang === "pt" ? "Adiantar R$ 2.500 Itaú" : "Advance $2,500 Itaú", s: lang === "pt" ? "Evita juros de R$ 312" : "Avoids $312 interest", k: "zap" },
-              { t: lang === "pt" ? "Cancelar Netflix duplicado" : "Cancel duplicate Netflix", s: lang === "pt" ? "Economia: R$ 671/ano" : "Saves $671/year", k: "x" },
-              { t: lang === "pt" ? "Rebalancear ITSA4" : "Rebalance ITSA4", s: lang === "pt" ? "Reduzir de 28% → 15%" : "Reduce from 28% → 15%", k: "refresh" },
-            ].map((a, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderTop: i === 0 ? "none" : "1px solid rgba(255,255,255,0.1)" }}>
-                <div style={{ width: 26, height: 26, borderRadius: 6, background: "rgba(255,255,255,0.1)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                  <Icon name={a.k} style={{ width: 13, height: 13, stroke: "white" }} className="" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.t}</div>
-                  <div style={{ fontSize: 11, opacity: 0.6, marginTop: 1 }}>{a.s}</div>
-                </div>
-                <button className="btn sm" style={{ background: "rgba(255,255,255,0.1)", border: "none", color: "white" }}>{t.apply}</button>
+            {s.catSummary.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {s.catSummary.slice(0, 5).map((c, i) => {
+                  const pct = s.expense > 0 ? (c.cur / s.expense * 100) : 0;
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="cat-dot" style={{ background: CAT_COLORS[c.k] ?? "var(--ink-3)", flexShrink: 0 }} />
+                      <span style={{ fontSize: 11.5, flex: 1 }}>{I18N[lang].categories[c.k] ?? c.k}</span>
+                      <span className="mono" style={{ fontSize: 11, opacity: 0.7 }}>{pct.toFixed(1)}%</span>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-            <div style={{ marginTop: 14, padding: 12, background: "rgba(255,255,255,0.06)", borderRadius: 8, fontSize: 11, opacity: 0.85, fontFamily: "var(--font-mono)", lineHeight: 1.55 }}>
-              <strong style={{ fontWeight: 600 }}>{lang === "pt" ? "Resumo:" : "Summary:"}</strong> {lang === "pt" ? "Gastos 22.3% acima · Dividendos 18% acima · Poupança em 27% (meta: 30%)" : "Spend 22.3% above · Dividends 18% above · Savings at 27% (goal: 30%)"}
-            </div>
+            ) : (
+              <div style={{ fontSize: 12, opacity: 0.5 }}>{pt ? "Sem gastos este mês" : "No expenses this month"}</div>
+            )}
           </div>
         </div>
       </div>
@@ -439,45 +458,41 @@ function DashboardNarrative({ lang }: { lang: Lang }) {
         <div className="card">
           <div className="card-head">
             <h3 className="card-title">{t.section_cashflow}</h3>
-            <div className="card-actions">
-              <div className="seg"><button className="on">{t.last_12m}</button><button>6m</button></div>
-            </div>
           </div>
-          <div className="card-pad"><CashflowChart data={CASHFLOW_12M} lang={lang} /></div>
+          <div className="card-pad">
+            {s.cashflow.length > 0
+              ? <CashflowChart data={s.cashflow} lang={lang} />
+              : <MiniEmpty icon="trend" label={pt ? "Sem dados de cashflow" : "No cashflow data"} />}
+          </div>
         </div>
         <div className="card">
           <div className="card-head"><h3 className="card-title">{t.section_insights}</h3></div>
-          <div>{INSIGHTS[lang].slice(0, 4).map((ins, i) => <InsightCard key={i} insight={ins} lang={lang} compact />)}</div>
+          <div>
+            {insights.length > 0
+              ? insights.map((ins, i) => <InsightCard key={i} insight={ins} lang={lang} compact />)
+              : <MiniEmpty icon="sparkle" label={pt ? "Nenhum insight disponível" : "No insights yet"} />}
+          </div>
         </div>
       </div>
 
       <div className="card">
         <div className="card-head"><h3 className="card-title">{t.section_goals}</h3></div>
-        <div className="card-pad" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 18 }}>
-          {GOALS.map((g) => {
-            const pct = (g.current / g.target) * 100;
-            return (
-              <div key={g.key}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{String(I18N[lang][`goal_${g.key}` as keyof typeof I18N.pt] ?? g.key)}</div>
-                <div style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>{fmtMoney(g.current, lang, true)} / {fmtMoney(g.target, lang, true)}</div>
-                <div className="pbar"><div className="pbar-fill" style={{ width: pct + "%", background: "var(--accent)" }}></div></div>
-                <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 6, fontFamily: "var(--font-mono)" }}>{pct.toFixed(0)}% · {lang === "pt" ? "meta" : "due"} {g.when}</div>
-              </div>
-            );
-          })}
-        </div>
+        <MiniEmpty icon="target" label={pt ? "Metas: crie sua primeira meta" : "Goals: create your first goal"} />
       </div>
     </div>
   );
 }
+
+/* ─── Dashboard root ─────────────────────────────────────────────── */
 
 interface DashboardProps {
   lang: Lang;
   layout: string;
   setLayout: (l: string) => void;
   hasData?: boolean;
+  txns?: Txn[];
 }
-export function Dashboard({ lang, layout, setLayout, hasData = false }: DashboardProps) {
+export function Dashboard({ lang, layout, setLayout, hasData = false, txns = [] }: DashboardProps) {
   const t = I18N[lang];
   return (
     <div className="page">
@@ -498,9 +513,9 @@ export function Dashboard({ lang, layout, setLayout, hasData = false }: Dashboar
       </div>
       {hasData ? (
         <>
-          {layout === "classic" && <DashboardClassic lang={lang} />}
-          {layout === "command" && <DashboardCommand lang={lang} />}
-          {layout === "narrative" && <DashboardNarrative lang={lang} />}
+          {layout === "classic" && <DashboardClassic lang={lang} txns={txns} />}
+          {layout === "command" && <DashboardCommand lang={lang} txns={txns} />}
+          {layout === "narrative" && <DashboardNarrative lang={lang} txns={txns} />}
         </>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 24px", textAlign: "center" }}>
@@ -518,7 +533,7 @@ export function Dashboard({ lang, layout, setLayout, hasData = false }: Dashboar
               <Icon name="upload" className="btn-icon" />
               {lang === "pt" ? "Importar documento" : "Import document"}
             </button>
-            <button className="btn sm" onClick={() => (window as any).__openTxnEdit?.({ d: new Date().toISOString().slice(0, 10), merch: "", cat: "", acct: "", amt: 0 })}>
+            <button className="btn sm" onClick={() => (window as any).__modal?.("newtxn", {})}>
               <Icon name="plus" className="btn-icon" />
               {lang === "pt" ? "Adicionar transação" : "Add transaction"}
             </button>

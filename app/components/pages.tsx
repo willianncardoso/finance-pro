@@ -68,62 +68,230 @@ function EmptyState({ icon, title, sub, cta, onCta }: { icon: string; title: str
 
 
 /* ============ CARDS ============ */
+
+// Available months from txns set, sorted descending
+function availableMonths(txns: Txn[]): string[] {
+  const set = new Set(txns.map(t => t.d.slice(0, 7)));
+  return [...set].sort((a, b) => b.localeCompare(a));
+}
+
+function monthLabel(ym: string, lang: Lang): string {
+  const [y, m] = ym.split('-');
+  const d = new Date(parseInt(y), parseInt(m) - 1, 1);
+  return d.toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', { month: 'long', year: 'numeric' });
+}
+
 export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
+  const pt = lang === 'pt';
+  const months = availableMonths(txns);
+  const [selMonth, setSelMonth] = useState(months[0] ?? '');
+  const [selAcct, setSelAcct] = useState('all');
+  const [search, setSearch] = useState('');
+
+  // Sync selMonth when txns change (e.g. first import)
+  useEffect(() => {
+    if (!selMonth && months.length > 0) setSelMonth(months[0]);
+  }, [months.length]);
 
   if (!txns.length) return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
-          <div className="page-sub">{lang === "pt" ? "Sem cartões cadastrados" : "No cards yet"}</div>
+          <div className="page-sub">{pt ? "Sem transações importadas" : "No transactions imported yet"}</div>
         </div>
-        <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{lang === "pt" ? "Importar fatura" : "Import statement"}
+        <button className="btn primary sm" onClick={() => (window as any).__navigate?.("import")}>
+          <Icon name="upload" className="btn-icon" />{pt ? "Importar fatura" : "Import statement"}
         </button>
       </div>
-      <EmptyState icon="credit_card" title={lang === "pt" ? "Nenhum cartão ainda" : "No cards yet"} sub={lang === "pt" ? "Importe uma fatura de cartão para ver seus gastos por cartão aqui." : "Import a credit card statement to see your card spending here."} cta={lang === "pt" ? "Importar fatura" : "Import statement"} onCta={() => (window as any).__navigate?.("import")} />
+      <EmptyState icon="card" title={pt ? "Nenhuma fatura ainda" : "No statements yet"} sub={pt ? "Importe uma fatura CSV do seu cartão (C6, Nubank, OFX…) para ver seus gastos aqui." : "Import a credit card statement (CSV, OFX…) to see your spending here."} cta={pt ? "Importar fatura" : "Import statement"} onCta={() => (window as any).__navigate?.("import")} />
     </div>
   );
+
+  // Accounts derived from txns
+  const allAccts = [...new Set(txns.map(t => t.acct))].sort();
+
+  // Filtered by month and account
+  const inMonth = selMonth ? txns.filter(t => t.d.startsWith(selMonth)) : txns;
+  const inAcct = selAcct === 'all' ? inMonth : inMonth.filter(t => t.acct === selAcct);
+  const filtered = search
+    ? inAcct.filter(t => t.merch.toLowerCase().includes(search.toLowerCase()) || (t.cat + t.sub).toLowerCase().includes(search.toLowerCase()))
+    : inAcct;
+
+  // Per-account summary for selected month
+  const acctSummary = allAccts.map(name => {
+    const rows = inMonth.filter(t => t.acct === name && t.amt < 0);
+    const total = rows.reduce((s, t) => s + Math.abs(t.amt), 0);
+    const count = rows.length;
+    return { name, total, count };
+  }).filter(a => a.count > 0).sort((a, b) => b.total - a.total);
+
+  // Category breakdown for filtered view
+  const byCat: Record<string, number> = {};
+  inAcct.filter(t => t.amt < 0).forEach(t => { byCat[t.cat] = (byCat[t.cat] ?? 0) + Math.abs(t.amt); });
+  const catBreakdown = Object.entries(byCat).map(([k, v]) => ({ k, cur: v, prev: 0, budget: 0 })).sort((a, b) => b.cur - a.cur);
+
+  const totalExpense = filtered.filter(t => t.amt < 0).reduce((s, t) => s + Math.abs(t.amt), 0);
+  const totalIncome = filtered.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
-          <div className="page-sub">{txns.length} {lang === "pt" ? "transações importadas" : "transactions imported"}</div>
+          <div className="page-sub">{selMonth ? monthLabel(selMonth, lang) : ''} · {allAccts.length} {pt ? 'cartões / contas' : 'cards / accounts'}</div>
         </div>
-        <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{lang === "pt" ? "Importar fatura" : "Import statement"}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn sm" onClick={() => (window as any).__modal?.('export', {})}>
+            <Icon name="download" className="btn-icon" />{pt ? 'Exportar' : 'Export'}
+          </button>
+          <button className="btn primary sm" onClick={() => (window as any).__navigate?.('import')}>
+            <Icon name="upload" className="btn-icon" />{pt ? 'Importar fatura' : 'Import statement'}
+          </button>
+        </div>
       </div>
 
-      {/* Transactions */}
+      {/* Account summary cards */}
+      {acctSummary.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, marginBottom: 14, overflowX: 'auto', paddingBottom: 2 }}>
+          {/* "All" pill */}
+          <div
+            onClick={() => setSelAcct('all')}
+            style={{ flexShrink: 0, padding: '12px 16px', borderRadius: 10, border: `1.5px solid ${selAcct === 'all' ? 'var(--ink)' : 'var(--border)'}`, background: selAcct === 'all' ? 'var(--bg-3)' : 'var(--surface)', cursor: 'pointer', minWidth: 130 }}
+          >
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600 }}>{pt ? 'Todos' : 'All'}</div>
+            <div className="num privacy-mask" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{fmtMoney(acctSummary.reduce((s, a) => s + a.total, 0), lang, true)}</div>
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'transações' : 'transactions'}</div>
+          </div>
+          {acctSummary.map(a => (
+            <div
+              key={a.name}
+              onClick={() => setSelAcct(selAcct === a.name ? 'all' : a.name)}
+              style={{ flexShrink: 0, padding: '12px 16px', borderRadius: 10, border: `1.5px solid ${selAcct === a.name ? 'var(--ink)' : 'var(--border)'}`, background: selAcct === a.name ? 'var(--bg-3)' : 'var(--surface)', cursor: 'pointer', minWidth: 160 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700, color: 'white' }}>
+                  {a.name.slice(0, 2).toUpperCase()}
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+              </div>
+              <div className="num neg privacy-mask" style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(a.total, lang, true)}</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{a.count} {pt ? 'transações' : 'transactions'}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 14, marginBottom: 14 }}>
+        {/* Category breakdown */}
+        <div className="card">
+          <div className="card-head">
+            <h3 className="card-title">{pt ? 'Gastos por categoria' : 'Spending by category'}</h3>
+            <span className="chip-sm">{selMonth ? monthLabel(selMonth, lang) : pt ? 'Total' : 'All time'}</span>
+          </div>
+          <div className="card-pad">
+            {catBreakdown.length > 0
+              ? <BarList items={catBreakdown.slice(0, 8)} lang={lang} />
+              : <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>{pt ? 'Sem gastos neste período' : 'No expenses in this period'}</div>}
+          </div>
+        </div>
+        {/* Summary */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 180 }}>
+          <div className="card card-pad">
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Total gasto' : 'Total spent'}</div>
+            <div className="num neg privacy-mask" style={{ fontSize: 22, fontWeight: 700 }}>{fmtMoney(totalExpense, lang, true)}</div>
+          </div>
+          {totalIncome > 0 && (
+            <div className="card card-pad">
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Créditos / estornos' : 'Credits / refunds'}</div>
+              <div className="num pos privacy-mask" style={{ fontSize: 22, fontWeight: 700 }}>+{fmtMoney(totalIncome, lang, true)}</div>
+            </div>
+          )}
+          <div className="card card-pad">
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Transações' : 'Transactions'}</div>
+            <div className="num" style={{ fontSize: 22, fontWeight: 700 }}>{filtered.length}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filters bar */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: '1 1 200px' }}>
+          <Icon name="search" style={{ width: 13, height: 13, position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', stroke: 'var(--ink-3)' }} className="" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder={pt ? 'Buscar estabelecimento…' : 'Search merchant…'}
+            style={{ width: '100%', paddingLeft: 30, paddingRight: 10, height: 34, border: '1px solid var(--border-2)', borderRadius: 8, fontSize: 13, background: 'var(--bg-2)', color: 'var(--ink)', boxSizing: 'border-box' }}
+          />
+        </div>
+        {months.length > 0 && (
+          <select
+            value={selMonth}
+            onChange={e => setSelMonth(e.target.value)}
+            className="field"
+            style={{ height: 34, fontSize: 13, padding: '0 10px', flexShrink: 0 }}
+          >
+            {months.map(m => <option key={m} value={m}>{monthLabel(m, lang)}</option>)}
+          </select>
+        )}
+        {selAcct !== 'all' && (
+          <button className="pill" style={{ cursor: 'pointer', background: 'var(--bg-3)', border: '1px solid var(--border)', padding: '4px 10px' }} onClick={() => setSelAcct('all')}>
+            {selAcct} ×
+          </button>
+        )}
+        {search && (
+          <button className="btn ghost sm" onClick={() => setSearch('')}>
+            {pt ? 'Limpar' : 'Clear'}
+          </button>
+        )}
+      </div>
+
+      {/* Transactions table */}
       <div className="card">
         <div className="card-head">
-          <h3 className="card-title">{lang === "pt" ? "Transações importadas" : "Imported transactions"}</h3>
-          <span className="chip-sm">{txns.length}</span>
+          <h3 className="card-title">{pt ? 'Transações' : 'Transactions'}</h3>
+          <span className="chip-sm">{filtered.length}</span>
         </div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Data" : "Date"}</th>
-            <th>{lang === "pt" ? "Estabelecimento" : "Merchant"}</th>
-            <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-            <th>{lang === "pt" ? "Parcela" : "Installment"}</th>
-            <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
-          </tr></thead>
-          <tbody>
-            {txns.slice(0, 50).map((tx, i) => (
-              <tr key={i}>
-                <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
-                <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />{I18N[lang].categories[tx.cat] ?? tx.cat}</span></td>
-                <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--ink-3)" }}>{tx.installment ?? "—"}</td>
-                <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(tx.amt, lang)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {filtered.length === 0 ? (
+          <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
+            {pt ? 'Nenhuma transação encontrada' : 'No transactions found'}
+          </div>
+        ) : (
+          <table className="t">
+            <thead><tr>
+              <th>{pt ? 'Data' : 'Date'}</th>
+              <th>{pt ? 'Estabelecimento' : 'Merchant'}</th>
+              <th>{pt ? 'Categoria' : 'Category'}</th>
+              <th>{pt ? 'Conta' : 'Account'}</th>
+              <th>{pt ? 'Parcela' : 'Installment'}</th>
+              <th className="r">{pt ? 'Valor' : 'Amount'}</th>
+            </tr></thead>
+            <tbody>
+              {filtered.map((tx, i) => (
+                <tr key={i} onClick={() => (window as any).__openTxnEdit?.(tx)} style={{ cursor: 'pointer' }}>
+                  <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
+                  <td style={{ fontWeight: 500 }}>{tx.merch}</td>
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span className="pill">
+                        <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
+                        {I18N[lang].categories[tx.cat] ?? tx.cat}
+                      </span>
+                      {tx.sub && <span style={{ fontSize: 10, color: 'var(--ink-4)', paddingLeft: 14 }}>{tx.sub}</span>}
+                    </div>
+                  </td>
+                  <td className="muted" style={{ fontSize: 11 }}>{tx.acct}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-3)' }}>{tx.installment ?? '—'}</td>
+                  <td className={"r num " + (tx.amt > 0 ? 'pos' : '')} style={{ fontWeight: 600 }}>
+                    {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -158,24 +326,147 @@ export function InvestPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   );
 }
 
-/* ============ IMPORT ============ */
+/* ============ IMPORT / PARSING ============ */
 const PIPE_LABELS_PT = ["Detectar", "Extrair", "Categorizar", "Revisar", "Importar"];
 const PIPE_LABELS_EN = ["Detect", "Extract", "Categorize", "Review", "Import"];
-const PIPE_DELAYS = [900, 1400, 1800]; // ms for steps 1→2, 2→3, 3→4
+const PIPE_DELAYS = [800, 1200, 1600]; // ms for steps 1→2, 2→3, 3→4
 
-/* ---- CSV parser (C6 Bank format) ---- */
+/* ── Universal categorizer ──────────────────────────────────────── */
+function catFor(text: string, amt: number): { cat: string; sub: string } {
+  const s = text.toLowerCase();
+
+  if (amt > 0) {
+    if (/salari|folha|holerite|remuner|payroll/.test(s)) return { cat: 'income', sub: 'Salário' };
+    if (/dividend|jscp|juros sobre capital|outros proventos/.test(s)) return { cat: 'income', sub: 'Dividendos' };
+    if (/resgate|rendimento|res de cdb/.test(s)) return { cat: 'invest', sub: 'Resgate' };
+    if (/reembolso|estorno|devolução|cashback/.test(s)) return { cat: 'income', sub: 'Reembolso' };
+    return { cat: 'income', sub: 'Outros' };
+  }
+
+  // Transfer / credit card payment
+  if (/fatura de cart|pgto fat cartao|pagamento fatura|pagto cartão/.test(s)) return { cat: 'transfer', sub: 'Pix enviado' };
+  if (/transf.*pix|pix.*envi|transferência|ted |doc /.test(s)) return { cat: 'transfer', sub: 'Pix enviado' };
+
+  // Transport
+  if (/uber|99pop|99 taxi|taxi|cabify|indriver/.test(s)) return { cat: 'transport', sub: 'Uber/99' };
+  if (/pedagio|pedágio|c6tag|sem parar|conectcar|veloe/.test(s)) return { cat: 'transport', sub: 'Pedágio' };
+  if (/estacionamento|estapark|multipark|park/.test(s)) return { cat: 'transport', sub: 'Estacionamento' };
+  if (/combustiv|gasolina|etanol|posto |shell|ipiranga|br dist|petrobras|raizen/.test(s)) return { cat: 'transport', sub: 'Combustível' };
+  if (/bilhete.nico|sptrans|metrô|metro|trem|cptm|brt|onibus|ônibus/.test(s)) return { cat: 'transport', sub: 'Transporte público' };
+  if (/seguro.*auto|dpvat|ipva|detran/.test(s)) return { cat: 'transport', sub: 'Manutenção' };
+
+  // Housing
+  if (/aluguel|locação|imob/.test(s)) return { cat: 'housing', sub: 'Aluguel' };
+  if (/condomin/.test(s)) return { cat: 'housing', sub: 'Condomínio' };
+  if (/enel|eletropaulo|cemig|copel|coelba|energi|light s\.a|eletric/.test(s)) return { cat: 'housing', sub: 'Energia' };
+  if (/comgas|companhia de gas|gás|gas natural|cosan/.test(s)) return { cat: 'housing', sub: 'Gás' };
+  if (/sabesp|cedae|embasa|agua e esgoto|saneamento/.test(s)) return { cat: 'housing', sub: 'Água' };
+  if (/claro|vivo fibra|tim fibra|net\b|oi fibra|internet|banda larga/.test(s)) return { cat: 'housing', sub: 'Internet' };
+  if (/iptu/.test(s)) return { cat: 'housing', sub: 'IPTU' };
+
+  // Investments
+  if (/tesouro direto|tesouro selic|tesouro prefixado/.test(s)) return { cat: 'invest', sub: 'Aporte' };
+  if (/emissao de cdb|emissão de cdb|cdb |lci |lca |debenture/.test(s)) return { cat: 'invest', sub: 'Aporte' };
+  if (/corretag|bovespa|b3\b|xp investimentos|rico\.com|clear\.com/.test(s)) return { cat: 'invest', sub: 'Corretagem' };
+
+  // Taxes / government
+  if (/receita federal|irpf|darf|tributo|imposto|issqn|icms/.test(s)) return { cat: 'tax', sub: 'DARF' };
+  if (/ipva/.test(s)) return { cat: 'tax', sub: 'IPVA' };
+  if (/inss|previdencia|rgps/.test(s)) return { cat: 'tax', sub: 'IR' };
+
+  // Health
+  if (/farmac|drogasil|droga raia|ultrafarma|onofre|pague menos/.test(s)) return { cat: 'health', sub: 'Farmácia' };
+  if (/consulta|médic|medic|clínica|clinica|hospital|upa |ubs |hcor|einstein|sírio/.test(s)) return { cat: 'health', sub: 'Consulta' };
+  if (/exame|laborat|fleury|dasa|hemocen|diagnóstico/.test(s)) return { cat: 'health', sub: 'Exame' };
+  if (/plano de saude|amil|bradesco saude|sulamerica|unimed|hapvida|notredame/.test(s)) return { cat: 'health', sub: 'Plano de saúde' };
+  if (/psico|terapia|psiquiat/.test(s)) return { cat: 'health', sub: 'Terapia' };
+  if (/dentist|odonto|clínica dental|dental/.test(s)) return { cat: 'health', sub: 'Consulta' };
+
+  // Subscriptions / streaming
+  if (/netflix|hbo|max\b|disney|prime video|globoplay|paramount|apple tv|star\+/.test(s)) return { cat: 'subs', sub: 'Streaming' };
+  if (/spotify|deezer|apple music|youtube premium|tidal/.test(s)) return { cat: 'subs', sub: 'Streaming' };
+  if (/microsoft 365|office 365|google one|icloud|adobe|dropbox|notion\.so|figma\.com/.test(s)) return { cat: 'subs', sub: 'Software' };
+  if (/antivirus|kaspersky|norton|bitdefender/.test(s)) return { cat: 'subs', sub: 'Software' };
+  if (/assinatura|revista|jornal|folha uol|estadão|nexo/.test(s)) return { cat: 'subs', sub: 'Jornal/revista' };
+
+  // Gym / fitness
+  if (/smartfit|bodytech|bluefit|selfit|academia|crossfit|pilates|spinning|fit pass|gympass|wellhub/.test(s)) return { cat: 'subs', sub: 'Academia' };
+
+  // Supermarket / grocery
+  if (/pao de acucar|paodeacucar|carrefour|extra\b|atacadao|assai|makro|sam.s club|costco|rede.s ipi/.test(s)) return { cat: 'food', sub: 'Supermercado' };
+  if (/supermercado|mercado\b|hortifruti|quitanda|mercearia|armazem/.test(s)) return { cat: 'food', sub: 'Supermercado' };
+  if (/padaria|panificadora|confeitaria/.test(s)) return { cat: 'food', sub: 'Padaria' };
+  if (/feira livre|banca de legumes/.test(s)) return { cat: 'food', sub: 'Feira' };
+
+  // Restaurants / food delivery
+  if (/ifood|rappi|uber eats|james delivery|aiqfome/.test(s)) return { cat: 'rest', sub: 'Delivery' };
+  if (/mcdonalds|mcdonald|burguer king|bob.s\b|subway|habib|giraffas|madero|outback/.test(s)) return { cat: 'rest', sub: 'Fast food' };
+  if (/starbucks|coffee|cafeteria|cafe\b/.test(s)) return { cat: 'rest', sub: 'Café' };
+  if (/restauran|rest\.|almoc|jantar|lanchon|pizza|pizzar|sushi|japonê|rodizio|churrascaria|bar\b|boteco|choperia/.test(s)) return { cat: 'rest', sub: 'Restaurante' };
+
+  // E-commerce / shopping
+  if (/amazon|amz\b/.test(s)) return { cat: 'shopping', sub: 'Eletrônicos' };
+  if (/mercado livre|mercadolivre|mercadopago/.test(s)) return { cat: 'shopping', sub: 'Eletrônicos' };
+  if (/shopee|aliexpress|shein|wish\.com/.test(s)) return { cat: 'shopping', sub: 'Roupas' };
+  if (/americanas|magazine luiza|magalu|casas bahia|pontofrio|extra\.com|submarino/.test(s)) return { cat: 'shopping', sub: 'Eletrônicos' };
+  if (/renner|riachuelo|c&a\b|cea\b|zara|hm\b|h&m|marisa|farm\b|reserva|dudalina|aramis/.test(s)) return { cat: 'shopping', sub: 'Roupas' };
+  if (/lojas americanas|leroy merlin|tok.stok|etna|camicado|leroy/.test(s)) return { cat: 'shopping', sub: 'Casa' };
+  if (/apple store|apple\.com|samsung|positivo/.test(s)) return { cat: 'shopping', sub: 'Eletrônicos' };
+
+  // Beauty / personal care
+  if (/salon|salão|cabeleireiro|barbearia|manicure|nail|estética|estetica|beauty|l.oreal|wella|boticário/.test(s)) return { cat: 'shopping', sub: 'Beleza' };
+  if (/farmacinha|beleza|maquiagem|perfume|sephora|o boticario|natura|avon/.test(s)) return { cat: 'shopping', sub: 'Beleza' };
+
+  // Pet
+  if (/petlove|cobasi|petz|pet shop|veterinár|veterinar|clinica vet|agropet/.test(s)) return { cat: 'shopping', sub: 'Pet' };
+
+  // Education
+  if (/curso|escola|treinamento|facul|universidade|udemy|coursera|alura|rocketseat|dio\.me/.test(s)) return { cat: 'education', sub: 'Curso' };
+  if (/livraria|livro|amazon kindle|kindle|saraiva|cultura\b/.test(s)) return { cat: 'education', sub: 'Livros' };
+
+  // Leisure / travel
+  if (/hotel|pousada|hostel|airbnb|booking|decolar|submarino viagem|latam|gol\.com|azul\.com|voeazul/.test(s)) return { cat: 'leisure', sub: 'Viagem' };
+  if (/cinema|ingresso|show|teatro|evento|ticketmaster|sympla|ticket360/.test(s)) return { cat: 'leisure', sub: 'Cinema/show' };
+  if (/loteria|mega.sena|jogo|aposta|bet365|sportingbet|parimatch/.test(s)) return { cat: 'leisure', sub: 'Hobby' };
+  if (/tatuagem|tattoo|piercing/.test(s)) return { cat: 'leisure', sub: 'Hobby' };
+
+  // FX
+  if (/wise|remessa|cambio|câmbio|paypal|payoneer/.test(s)) return { cat: 'shopping', sub: 'Internacional' };
+
+  return { cat: 'shopping', sub: 'Outros' };
+}
+
+/* ── CSV line parser (respects quoted commas) ───────────────────── */
 function parseCSVLine(line: string): string[] {
   const cols: string[] = [];
   let cur = '', inQ = false;
   for (const ch of line) {
     if (ch === '"') inQ = !inQ;
-    else if (ch === ',' && !inQ) { cols.push(cur); cur = ''; }
+    else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
     else cur += ch;
   }
-  cols.push(cur);
+  cols.push(cur.trim());
   return cols;
 }
 
+/* ── Format detection ───────────────────────────────────────────── */
+type CsvFormat = 'c6' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic';
+
+function detectFormat(content: string, filename: string): CsvFormat {
+  const fn = filename.toLowerCase();
+  const head = content.slice(0, 2000).toLowerCase();
+  if (fn.endsWith('.ofx') || fn.endsWith('.qfx') || head.includes('<ofx>') || head.includes('<stmttrn>')) return 'ofx';
+  if (head.includes('entrada') && head.includes('saída') && (head.includes('c6') || head.includes('data,saldo') || head.includes('titulo'))) return 'c6';
+  if (head.startsWith('date,category,title,amount') || head.startsWith('data,categoria,titulo,valor')) return 'nubank';
+  if (head.includes('inter bank') || head.includes('banco inter')) return 'inter';
+  if (head.includes('bradesco') || head.includes('next') && head.includes('agencia')) return 'bradesco';
+  // Heuristic: first data line looks like DD/MM/YYYY
+  const firstLine = content.split('\n').find(l => /\d{2}\/\d{2}\/\d{4}/.test(l));
+  if (firstLine) return 'c6';
+  return 'generic';
+}
+
+/* ── C6 Bank CSV parser ─────────────────────────────────────────── */
 function c6Merchant(titulo: string, desc: string): string {
   const d = desc.trim(), t = titulo.trim();
   const generic = !d || /^transf\s+enviada\s+pix/i.test(d) || /^evg\d/i.test(d) || (/^\d{3,}/.test(d) && d.includes('-'));
@@ -189,39 +480,10 @@ function c6Merchant(titulo: string, desc: string): string {
   return d;
 }
 
-function c6Category(titulo: string, desc: string, amt: number): string {
-  const s = `${titulo} ${desc}`.toLowerCase();
-  if (amt > 0) {
-    if (/salari|folha|holerite|remuner/.test(s)) return 'income';
-    if (/dividend|juros sobre capital|outros proventos/.test(s)) return 'income';
-    if (/res de cdb|resgate|rendimento/.test(s)) return 'invest';
-    return 'income';
-  }
-  if (/pedagio|pedágio|c6tag pedagio/.test(s)) return 'transport';
-  if (/estacionamento|c6tag estacion/.test(s)) return 'transport';
-  if (/combustiv|gasolina|posto|abastec/.test(s)) return 'transport';
-  if (/uber|99pop|taxi|cabify/.test(s)) return 'transport';
-  if (/bilhete.nico|sptrans|metrô|metro|trem/.test(s)) return 'transport';
-  if (/aluguel|condomin/.test(s)) return 'housing';
-  if (/enel|eletropaulo|energia|cpfl/.test(s)) return 'housing';
-  if (/comgas|companhia de gas|gás/.test(s)) return 'housing';
-  if (/internet|vivo fibra|claro|net\b/.test(s)) return 'housing';
-  if (/tesouro direto|emissao de cdb|emissão de cdb/.test(s)) return 'invest';
-  if (/receita federal|irpf|darf|tributos federais/.test(s)) return 'tax';
-  if (/farmac|remédio|remedio|medic|consulta|exame|hospital|ortopedic/.test(s)) return 'health';
-  if (/supermercado|mercado|hortifruti|feira|padaria|lichia/.test(s)) return 'food';
-  if (/restauran|almoc|jantar|lanche|pizza|burger|sushi|bar\b/.test(s)) return 'rest';
-  if (/fatura de cart|pgto fat cartao/.test(s)) return 'transfer';
-  if (/curso|escola|treinamento|facul|galindo/.test(s)) return 'education';
-  if (/loteria|cinema|show|ingresso|tatuagem/.test(s)) return 'leisure';
-  if (/wise|cambio/.test(s)) return 'shopping';
-  return 'transfer';
-}
-
-function parseC6CSV(content: string): Txn[] {
+function parseC6CSV(content: string, acct = 'C6 Bank'): Txn[] {
   const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
   const lines = clean.split('\n');
-  const headerIdx = lines.findIndex(l => l.includes('Entrada') && l.includes('Sa'));
+  const headerIdx = lines.findIndex(l => /entrada/i.test(l) && /sa[íi]da/i.test(l));
   if (headerIdx < 0) return [];
   const txns: Txn[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -233,27 +495,117 @@ function parseC6CSV(content: string): Txn[] {
     const parts = dateStr.split('/');
     if (parts.length !== 3) continue;
     const d = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    const entrada = parseFloat(entradaStr) || 0;
-    const saida = parseFloat(saidaStr) || 0;
+    const entrada = parseFloat(entradaStr.replace(/\./g, '').replace(',', '.')) || 0;
+    const saida = parseFloat(saidaStr.replace(/\./g, '').replace(',', '.')) || 0;
     if (entrada === 0 && saida === 0) continue;
     const amt = entrada > 0 ? entrada : -saida;
-    txns.push({ id: newId(), d, merch: c6Merchant(titulo, descricao), cat: c6Category(titulo, descricao, amt), acct: 'C6 Bank', amt });
+    const merch = c6Merchant(titulo, descricao);
+    const { cat, sub } = catFor(`${titulo} ${descricao}`, amt);
+    txns.push({ id: newId(), d, merch, cat, sub, acct, amt });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
 
-export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportComplete?: (txns: Txn[]) => void }) {
+/* ── Nubank CSV parser ──────────────────────────────────────────── */
+// Format: date,category,title,amount  (amount is always positive expense)
+function parseNubankCSV(content: string, acct = 'Nubank'): Txn[] {
+  const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
+  const lines = clean.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const txns: Txn[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    if (cols.length < 4) continue;
+    const [dateStr, , titulo, amtStr] = cols;
+    if (!dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) continue;
+    const raw = parseFloat(amtStr.replace(',', '.'));
+    if (isNaN(raw)) continue;
+    // Nubank: positive = expense (debit), negative = refund/credit
+    const amt = -raw; // invert: we store expenses as negative
+    const { cat, sub } = catFor(titulo, amt);
+    txns.push({ id: newId(), d: dateStr, merch: titulo.trim(), cat, sub, acct, amt });
+  }
+  return txns.sort((a, b) => b.d.localeCompare(a.d));
+}
+
+/* ── OFX parser ─────────────────────────────────────────────────── */
+function parseOFX(content: string, acct = 'Importado'): Txn[] {
+  const txns: Txn[] = [];
+  const blocks = content.split(/<\/?STMTTRN>/i).filter((_, i) => i % 2 === 1);
+  for (const block of blocks) {
+    const get = (tag: string) => {
+      const m = block.match(new RegExp(`<${tag}>([^\n<]*)`, 'i'));
+      return m ? m[1].trim() : '';
+    };
+    const dtRaw = get('DTPOSTED');
+    if (!dtRaw) continue;
+    const d = `${dtRaw.slice(0, 4)}-${dtRaw.slice(4, 6)}-${dtRaw.slice(6, 8)}`;
+    const amtRaw = parseFloat(get('TRNAMT').replace(',', '.'));
+    if (isNaN(amtRaw)) continue;
+    const merch = get('MEMO') || get('NAME') || get('FITID');
+    const { cat, sub } = catFor(merch, amtRaw);
+    txns.push({ id: newId(), d, merch: merch.slice(0, 60), cat, sub, acct, amt: amtRaw });
+  }
+  return txns.sort((a, b) => b.d.localeCompare(a.d));
+}
+
+/* ── Generic CSV parser (best-effort) ──────────────────────────── */
+function parseGenericCSV(content: string, acct = 'Importado'): Txn[] {
+  const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
+  const lines = clean.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return [];
+  // Find date column: first col that looks like a date
+  const txns: Txn[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    // Try to find date (DD/MM/YYYY or YYYY-MM-DD) and amount
+    let d = '', merch = '', amtRaw = 0;
+    for (const col of cols) {
+      if (!d && /^\d{2}\/\d{2}\/\d{4}$/.test(col)) {
+        const p = col.split('/');
+        d = `${p[2]}-${p[1]}-${p[0]}`;
+      } else if (!d && /^\d{4}-\d{2}-\d{2}$/.test(col)) {
+        d = col;
+      } else if (!amtRaw) {
+        const n = parseFloat(col.replace(/\./g, '').replace(',', '.'));
+        if (!isNaN(n) && Math.abs(n) > 0.01) amtRaw = n;
+      } else if (!merch && col.length > 2 && !/^\d/.test(col)) {
+        merch = col;
+      }
+    }
+    if (!d || !amtRaw) continue;
+    const { cat, sub } = catFor(merch, amtRaw);
+    txns.push({ id: newId(), d, merch: merch || 'Desconhecido', cat, sub, acct, amt: amtRaw });
+  }
+  return txns.sort((a, b) => b.d.localeCompare(a.d));
+}
+
+/* ── Route file to parser ────────────────────────────────────────── */
+function parseFile(content: string, filename: string, acct?: string): Txn[] {
+  const fmt = detectFormat(content, filename);
+  const name = acct || (fmt === 'c6' ? 'C6 Bank' : fmt === 'nubank' ? 'Nubank' : 'Importado');
+  if (fmt === 'nubank') return parseNubankCSV(content, name);
+  if (fmt === 'ofx') return parseOFX(content, name);
+  if (fmt === 'c6') return parseC6CSV(content, name);
+  return parseGenericCSV(content, name);
+}
+
+export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportComplete?: (txns: Txn[], mode: 'merge' | 'replace') => void }) {
   const t = I18N[lang];
+  const pt = lang === 'pt';
   const [drag, setDrag] = useState(false);
-  const [fileName, setFileName] = useState("");
+  const [fileName, setFileName] = useState('');
   const [pipeStep, setPipeStep] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
-  const [history, setHistory] = useState<{ name: string; when: string; count: number }[]>([]);
-  const [rawContent, setRawContent] = useState("");
+  const [history, setHistory] = useState<{ name: string; when: string; count: number; fmt: string }[]>([]);
+  const [rawContent, setRawContent] = useState('');
+  const [detectedFmt, setDetectedFmt] = useState<CsvFormat>('generic');
+  const [acctName, setAcctName] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem("fp_imports");
+      const stored = localStorage.getItem('fp_imports');
       if (stored) setHistory(JSON.parse(stored));
     } catch {}
   }, []);
@@ -266,74 +618,81 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
     const timer = setTimeout(() => {
       let newLogs: string[] = [];
       if (pipeStep === 1) {
-        const fmt = rawContent.includes('C6') ? 'C6 Bank' : rawContent.includes('Nubank') ? 'Nubank' : lang === 'pt' ? 'Genérico' : 'Generic';
-        newLogs = lang === 'pt'
-          ? [`✓ Formato: Extrato ${fmt}`, `✓ Codificação: UTF-8`]
-          : [`✓ Format: ${fmt} statement`, `✓ Encoding: UTF-8`];
+        const fmt = detectFormat(rawContent, fileName);
+        setDetectedFmt(fmt);
+        const fmtLabel: Record<CsvFormat, string> = { c6: 'C6 Bank CSV', nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV', ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV' };
+        newLogs = pt
+          ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `✓ Codificação: UTF-8`]
+          : [`✓ Format detected: ${fmtLabel[fmt]}`, `✓ Encoding: UTF-8`];
       } else if (pipeStep === 2) {
-        const rows = rawContent.split('\n').filter(l => l.trim() && /^\d{2}\/\d{2}\/\d{4}/.test(l.trim())).length;
-        newLogs = lang === 'pt'
-          ? [`✓ ${rows} linhas de transação encontradas`, `✓ Campos: Data · Título · Descrição · Valor`]
-          : [`✓ ${rows} transaction rows found`, `✓ Fields: Date · Title · Description · Amount`];
+        const rows = rawContent.split('\n').filter(l => l.trim() && (/^\d{2}\/\d{2}\/\d{4}/.test(l.trim()) || /^\d{4}-\d{2}-\d{2}/.test(l.trim()) || /<STMTTRN>/i.test(l))).length || rawContent.split('\n').filter(l => l.trim()).length - 1;
+        newLogs = pt
+          ? [`✓ ${Math.max(rows, 0)} linhas de dados encontradas`, `✓ Iniciando categorização inteligente`]
+          : [`✓ ${Math.max(rows, 0)} data rows found`, `✓ Starting smart categorization`];
       } else if (pipeStep === 3) {
-        const txns = parseC6CSV(rawContent);
-        setParsedTxns(txns);
-        const needsReview = txns.filter(tx => tx.cat === 'transfer' && tx.amt < 0).length;
-        newLogs = lang === 'pt'
-          ? [`✓ ${txns.length} transações extraídas`, `✓ ${txns.length - needsReview} categorizadas automaticamente`, `○ ${needsReview} aguardando revisão`]
-          : [`✓ ${txns.length} transactions extracted`, `✓ ${txns.length - needsReview} auto-categorized`, `○ ${needsReview} pending review`];
+        const result = parseFile(rawContent, fileName, acctName || undefined);
+        setParsedTxns(result);
+        const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
+        const categorized = result.length - uncategorized;
+        newLogs = pt
+          ? [`✓ ${result.length} transações extraídas`, `✓ ${categorized} categorizadas automaticamente`, uncategorized > 0 ? `○ ${uncategorized} com categoria genérica (revise)` : `✓ Todas categorizadas com sucesso`]
+          : [`✓ ${result.length} transactions extracted`, `✓ ${categorized} auto-categorized`, uncategorized > 0 ? `○ ${uncategorized} with generic category (review)` : `✓ All categorized successfully`];
       }
       setLogs(prev => [...prev, ...newLogs]);
       setPipeStep(s => s + 1);
     }, PIPE_DELAYS[pipeStep - 1]);
     return () => clearTimeout(timer);
-  }, [pipeStep, lang, rawContent]);
+  }, [pipeStep, lang, rawContent, fileName, acctName]);
 
   function handleFile(file: File) {
     setFileName(file.name);
     setParsedTxns([]);
-    setRawContent("");
+    setRawContent('');
     setLogs([]);
+    setShowPreview(false);
     const reader = new FileReader();
     reader.onload = e => {
-      const content = (e.target?.result as string) ?? "";
+      const content = (e.target?.result as string) ?? '';
       setRawContent(content);
-      setLogs([lang === "pt" ? `✓ Arquivo: ${file.name}` : `✓ File: ${file.name}`]);
+      setLogs([pt ? `✓ Arquivo: ${file.name}` : `✓ File: ${file.name}`]);
       setPipeStep(1);
     };
-    reader.readAsText(file, "utf-8");
+    reader.readAsText(file, 'utf-8');
   }
 
-  function handleConfirm() {
+  function handleConfirm(mode: 'merge' | 'replace') {
     if (pipeStep !== 4) return;
     setPipeStep(5);
     const count = parsedTxns.length;
+    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', generic: pt ? 'Genérico' : 'Generic' };
     setTimeout(() => {
-      setLogs(prev => [...prev, ...(lang === "pt"
-        ? [`Salvando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
-        : [`Saving ${count} transactions...`, `✓ Local database updated`, `✓ Done`])]);
+      setLogs(prev => [...prev, ...(pt
+        ? [`Mesclando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
+        : [`Merging ${count} transactions...`, `✓ Local database updated`, `✓ Done`])]);
       const entry = {
         name: fileName,
-        when: new Date().toLocaleDateString(lang === "pt" ? "pt-BR" : "en-US", { day: "2-digit", month: "short", year: "numeric" }),
+        when: new Date().toLocaleDateString(pt ? 'pt-BR' : 'en-US', { day: '2-digit', month: 'short', year: 'numeric' }),
         count,
+        fmt: fmtLabels[detectedFmt],
       };
       setHistory(prev => {
         const updated = [entry, ...prev];
-        try { localStorage.setItem("fp_imports", JSON.stringify(updated)); } catch {}
+        try { localStorage.setItem('fp_imports', JSON.stringify(updated)); } catch {}
         return updated;
       });
       setPipeStep(6);
-      onImportComplete?.(parsedTxns);
-    }, 1200);
+      onImportComplete?.(parsedTxns, mode);
+    }, 1000);
   }
 
   function handleReset() {
     setPipeStep(0);
-    setFileName("");
+    setFileName('');
     setLogs([]);
+    setShowPreview(false);
   }
 
-  const steps = lang === "pt" ? PIPE_LABELS_PT : PIPE_LABELS_EN;
+  const steps = pt ? PIPE_LABELS_PT : PIPE_LABELS_EN;
   const isProcessing = pipeStep >= 1 && pipeStep <= 5;
   const isDone = pipeStep === 6;
   const awaitingConfirm = pipeStep === 4;
