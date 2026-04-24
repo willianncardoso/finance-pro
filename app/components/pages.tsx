@@ -97,15 +97,15 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const pt = lang === 'pt';
 
-  // Only credit card transactions; fall back gracefully if none tagged yet
   const cardTxns = txns.filter(tx => tx.kind === 'card');
   const effective = cardTxns.length > 0 ? cardTxns : txns.filter(tx => tx.kind !== 'account');
 
   const months = availableMonths(effective);
-  const [selMonth, setSelMonth] = useState('');   // '' = all months
+  const [selMonth, setSelMonth] = useState('');
   const [selAcct, setSelAcct] = useState('all');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
+  const [selCat, setSelCat] = useState('');
 
   if (!effective.length) return (
     <div className="page">
@@ -118,8 +118,7 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           <Icon name="upload" className="btn-icon" />{pt ? 'Importar fatura' : 'Import statement'}
         </button>
       </div>
-      <EmptyState
-        icon="card"
+      <EmptyState icon="card"
         title={pt ? 'Nenhuma fatura ainda' : 'No statements yet'}
         sub={pt ? 'Importe uma fatura CSV do C6 ou Nubank para ver seus gastos aqui.' : 'Import a C6 or Nubank CSV statement to see your card spending here.'}
         cta={pt ? 'Importar fatura' : 'Import statement'}
@@ -133,52 +132,46 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   // Filter pipeline
   const inMonth = selMonth ? effective.filter(tx => tx.d.startsWith(selMonth)) : effective;
   const inAcct  = selAcct === 'all' ? inMonth : inMonth.filter(tx => tx.acct === selAcct);
+  // Category breakdown uses inAcct (stable — doesn't shrink when selCat is active)
+  const byCat: Record<string, number> = {};
+  inAcct.filter(tx => tx.amt < 0 && tx.cat !== 'transfer').forEach(tx => {
+    byCat[tx.cat] = (byCat[tx.cat] ?? 0) + Math.abs(tx.amt);
+  });
+  const catBreakdown = Object.entries(byCat).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v);
+  const catTotal = catBreakdown.reduce((s, c) => s + c.v, 0);
+
+  const inCat = selCat ? inAcct.filter(tx => tx.cat === selCat) : inAcct;
   const searched = search.trim()
-    ? inAcct.filter(tx =>
+    ? inCat.filter(tx =>
         tx.merch.toLowerCase().includes(search.toLowerCase()) ||
         (I18N[lang].categories[tx.cat] ?? tx.cat).toLowerCase().includes(search.toLowerCase())
       )
-    : inAcct;
-  // Sort: by date desc normally; by amount desc when user selects amount
+    : inCat;
   const filtered = [...searched].sort((a, b) =>
     sortBy === 'amount' ? Math.abs(b.amt) - Math.abs(a.amt) : b.d.localeCompare(a.d)
   );
 
-  // Per-account totals (based on month + account filter applied so far at inMonth level)
+  // Per-account totals — exclude transfer (card payments) from income display
   const acctSummary = allAccts.map(name => {
     const rows = inMonth.filter(tx => tx.acct === name);
     const expense = rows.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
-    const income  = rows.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
-    return { name, expense, income, count: rows.length };
-  }).filter(a => a.count > 0).sort((a, b) => b.expense - a.expense);
+    const refunds = rows.filter(tx => tx.amt > 0 && tx.cat !== 'transfer').reduce((s, tx) => s + tx.amt, 0);
+    return { name, expense, refunds, count: rows.filter(tx => tx.amt < 0).length };
+  }).filter(a => a.expense > 0).sort((a, b) => b.expense - a.expense);
 
-  // Totals reflect the full filter (month + account + search)
+  // Totals (expenses only; genuine refunds separately; card payments excluded from display)
   const totalExpense = filtered.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
-  const totalIncome  = filtered.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
+  const totalRefunds = filtered.filter(tx => tx.amt > 0 && tx.cat !== 'transfer').reduce((s, tx) => s + tx.amt, 0);
 
-  // Category breakdown — based on month + account selection (ignores search so chart stays stable)
-  const byCat: Record<string, number> = {};
-  inAcct.filter(tx => tx.amt < 0).forEach(tx => { byCat[tx.cat] = (byCat[tx.cat] ?? 0) + Math.abs(tx.amt); });
-  const catBreakdown = Object.entries(byCat)
-    .map(([k, v]) => ({ k, cur: v, prev: 0, budget: 0 }))
-    .sort((a, b) => b.cur - a.cur);
-
-  // Month navigation helpers (months sorted desc: newest first)
+  // Month navigation
   const mIdx = months.indexOf(selMonth);
-  const goOlder = () => { // ‹
-    if (!selMonth) setSelMonth(months[0]);           // "all" → most recent
-    else if (mIdx < months.length - 1) setSelMonth(months[mIdx + 1]);
-  };
-  const goNewer = () => { // ›
-    if (!selMonth) return;
-    if (mIdx > 0) setSelMonth(months[mIdx - 1]);
-    else setSelMonth('');                             // oldest specific → back to "all"
-  };
+  const goOlder = () => { if (!selMonth) setSelMonth(months[0]); else if (mIdx < months.length - 1) setSelMonth(months[mIdx + 1]); };
+  const goNewer = () => { if (!selMonth) return; if (mIdx > 0) setSelMonth(months[mIdx - 1]); else setSelMonth(''); };
   const olderDisabled = selMonth ? mIdx >= months.length - 1 : false;
   const newerDisabled = !selMonth;
 
-  const clearFilters = () => { setSearch(''); setSelAcct('all'); setSelMonth(''); };
-  const hasFilters = search || selAcct !== 'all' || selMonth;
+  const clearFilters = () => { setSearch(''); setSelAcct('all'); setSelMonth(''); setSelCat(''); };
+  const hasFilters = !!(search || selAcct !== 'all' || selMonth || selCat);
 
   return (
     <div className="page">
@@ -192,35 +185,72 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Month navigator */}
           <div style={{ display: 'flex', alignItems: 'center', height: 34, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <button
-              className="btn ghost sm"
-              style={{ borderRadius: 0, borderRight: '1px solid var(--border)', padding: '0 11px', height: '100%', fontSize: 16, lineHeight: 1 }}
-              disabled={olderDisabled}
-              onClick={goOlder}
-              title={pt ? 'Mês anterior' : 'Previous month'}
-            >‹</button>
-            <select
-              value={selMonth}
-              onChange={e => setSelMonth(e.target.value)}
-              style={{ border: 'none', background: 'transparent', fontSize: 12, fontWeight: 600, padding: '0 8px', height: '100%', cursor: 'pointer', color: 'var(--ink)', minWidth: 130 }}
-            >
+            <button className="btn ghost sm" style={{ borderRadius: 0, borderRight: '1px solid var(--border)', padding: '0 11px', height: '100%', fontSize: 16, lineHeight: 1 }}
+              disabled={olderDisabled} onClick={goOlder} title={pt ? 'Mês anterior' : 'Previous month'}>‹</button>
+            <select value={selMonth} onChange={e => setSelMonth(e.target.value)}
+              style={{ border: 'none', background: 'transparent', fontSize: 12, fontWeight: 600, padding: '0 8px', height: '100%', cursor: 'pointer', color: 'var(--ink)', minWidth: 130 }}>
               <option value="">{pt ? 'Todos os meses' : 'All months'}</option>
               {months.map(m => <option key={m} value={m}>{monthLabel(m, lang)}</option>)}
             </select>
-            <button
-              className="btn ghost sm"
-              style={{ borderRadius: 0, borderLeft: '1px solid var(--border)', padding: '0 11px', height: '100%', fontSize: 16, lineHeight: 1 }}
-              disabled={newerDisabled}
-              onClick={goNewer}
-              title={pt ? 'Próximo mês' : 'Next month'}
-            >›</button>
+            <button className="btn ghost sm" style={{ borderRadius: 0, borderLeft: '1px solid var(--border)', padding: '0 11px', height: '100%', fontSize: 16, lineHeight: 1 }}
+              disabled={newerDisabled} onClick={goNewer} title={pt ? 'Próximo mês' : 'Next month'}>›</button>
           </div>
           <button className="btn primary sm" onClick={() => (window as any).__navigate?.('import')}>
             <Icon name="upload" className="btn-icon" />{pt ? 'Importar' : 'Import'}
           </button>
         </div>
+      </div>
+
+      {/* ── Card chips ─────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, overflowX: 'auto', paddingBottom: 4 }}>
+        {/* All-cards chip */}
+        <div role="button" tabIndex={0}
+          onClick={() => setSelAcct('all')}
+          onKeyDown={e => e.key === 'Enter' && setSelAcct('all')}
+          style={{ flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 150,
+            background: selAcct === 'all' ? 'var(--ink)' : 'var(--surface)',
+            border: `1.5px solid ${selAcct === 'all' ? 'transparent' : 'var(--border)'}`,
+            color: selAcct === 'all' ? 'var(--surface)' : 'var(--ink)', userSelect: 'none' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', opacity: 0.55, textTransform: 'uppercase', marginBottom: 8 }}>{pt ? 'Todos os cartões' : 'All cards'}</div>
+          <div className="num privacy-mask" style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em' }}>
+            {fmtMoney(acctSummary.reduce((s, a) => s + a.expense, 0), lang, true)}
+          </div>
+          <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
+            {acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'compras' : 'purchases'}
+          </div>
+        </div>
+
+        {acctSummary.map(a => {
+          const accent = cardAccent(a.name);
+          const active = selAcct === a.name;
+          const isDark = accent === '#1a1a1a' || accent === '#000';
+          const bg = active ? (isDark ? '#2a2a2a' : accent) : 'var(--surface)';
+          return (
+            <div key={a.name} role="button" tabIndex={0}
+              onClick={() => setSelAcct(active ? 'all' : a.name)}
+              onKeyDown={e => e.key === 'Enter' && setSelAcct(active ? 'all' : a.name)}
+              style={{ flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 185,
+                background: bg, border: `1.5px solid ${active ? 'transparent' : 'var(--border)'}`,
+                color: active ? '#fff' : 'var(--ink)', userSelect: 'none',
+                boxShadow: active ? `0 4px 16px ${accent}40` : 'none',
+                transition: 'box-shadow 0.15s, background 0.15s' }}>
+              {/* Card brand strip */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <div style={{ width: 28, height: 18, borderRadius: 4, background: active ? 'rgba(255,255,255,0.2)' : accent + '25',
+                  border: `1px solid ${active ? 'rgba(255,255,255,0.3)' : accent + '40'}` }} />
+                <div style={{ fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: active ? 0.9 : 1 }}>{a.name}</div>
+              </div>
+              <div className="num privacy-mask" style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' }}>
+                {fmtMoney(a.expense, lang, true)}
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginTop: 6, opacity: 0.6, fontSize: 11 }}>
+                <span>{a.count} {pt ? 'tx' : 'tx'}</span>
+                {a.refunds > 0 && <span>+{fmtMoney(a.refunds, lang, true)} {pt ? 'est.' : 'ref.'}</span>}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* ── Stats row ──────────────────────────────────────────────── */}
@@ -230,90 +260,83 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           <div className="num neg privacy-mask" style={{ fontSize: 24, fontWeight: 700 }}>{fmtMoney(totalExpense, lang, true)}</div>
           {selMonth && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 4 }}>{monthLabel(selMonth, lang)}</div>}
         </div>
-        {totalIncome > 0 && (
+        {totalRefunds > 0 && (
           <div className="card card-pad" style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Créditos / estornos' : 'Credits / refunds'}</div>
-            <div className="num pos privacy-mask" style={{ fontSize: 24, fontWeight: 700 }}>+{fmtMoney(totalIncome, lang, true)}</div>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Estornos' : 'Refunds'}</div>
+            <div className="num pos privacy-mask" style={{ fontSize: 24, fontWeight: 700 }}>+{fmtMoney(totalRefunds, lang, true)}</div>
           </div>
         )}
         <div className="card card-pad" style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Transações' : 'Transactions'}</div>
-          <div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{filtered.length}</div>
-          {search && <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 4 }}>{pt ? 'filtradas' : 'filtered'}</div>}
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 6 }}>{pt ? 'Compras' : 'Purchases'}</div>
+          <div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{filtered.filter(tx => tx.amt < 0).length}</div>
         </div>
       </div>
 
-      {/* ── Card chips ─────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, overflowX: 'auto', paddingBottom: 4 }}>
-        {/* All-cards chip */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => setSelAcct('all')}
-          onKeyDown={e => e.key === 'Enter' && setSelAcct('all')}
-          style={{
-            flexShrink: 0, cursor: 'pointer', borderRadius: 12, padding: '12px 16px', minWidth: 140,
-            background: selAcct === 'all' ? 'var(--ink)' : 'var(--surface)',
-            border: `1.5px solid ${selAcct === 'all' ? 'transparent' : 'var(--border)'}`,
-            color: selAcct === 'all' ? 'var(--surface)' : 'var(--ink)',
-            userSelect: 'none',
-          }}
-        >
-          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', opacity: 0.6, textTransform: 'uppercase', marginBottom: 6 }}>{pt ? 'Todos' : 'All'}</div>
-          <div className="num privacy-mask" style={{ fontSize: 18, fontWeight: 700 }}>
-            {fmtMoney(acctSummary.reduce((s, a) => s + a.expense, 0), lang, true)}
-          </div>
-          <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
-            {acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'tx' : 'tx'}
-          </div>
-        </div>
-
-        {acctSummary.map(a => {
-          const accent = cardAccent(a.name);
-          const active = selAcct === a.name;
-          return (
-            <div
-              key={a.name}
-              role="button"
-              tabIndex={0}
-              onClick={() => setSelAcct(active ? 'all' : a.name)}
-              onKeyDown={e => e.key === 'Enter' && setSelAcct(active ? 'all' : a.name)}
-              style={{
-                flexShrink: 0, cursor: 'pointer', borderRadius: 12, padding: '12px 16px', minWidth: 175,
-                background: active ? accent : 'var(--surface)',
-                border: `1.5px solid ${active ? 'transparent' : 'var(--border)'}`,
-                color: active ? '#fff' : 'var(--ink)',
-                userSelect: 'none',
-              }}
-            >
-              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: active ? 0.9 : 1 }}>{a.name}</div>
-              <div className="num privacy-mask" style={{ fontSize: 18, fontWeight: 700 }}>
-                {fmtMoney(a.expense, lang, true)}
-              </div>
-              {a.income > 0 && (
-                <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>
-                  +{fmtMoney(a.income, lang, true)} {pt ? 'estornos' : 'refunds'}
-                </div>
-              )}
-              <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
-                {a.count} {pt ? 'tx' : 'tx'}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── Category breakdown ─────────────────────────────────────── */}
+      {/* ── Category breakdown — DonutChart + interactive legend ───── */}
       {catBreakdown.length > 0 && (
         <div className="card" style={{ marginBottom: 14 }}>
           <div className="card-head">
             <h3 className="card-title">{pt ? 'Gastos por categoria' : 'Spending by category'}</h3>
-            <span className="chip-sm">
-              {selAcct !== 'all' ? selAcct : selMonth ? monthLabel(selMonth, lang) : pt ? 'todos' : 'all'}
-            </span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {selCat && (
+                <button className="btn ghost sm" style={{ fontSize: 11 }} onClick={() => setSelCat('')}>
+                  × {I18N[lang].categories[selCat] ?? selCat}
+                </button>
+              )}
+              <span className="chip-sm">{selAcct !== 'all' ? selAcct : selMonth ? monthLabel(selMonth, lang) : pt ? 'todos' : 'all'}</span>
+            </div>
           </div>
-          <div className="card-pad">
-            <BarList items={catBreakdown.slice(0, 10)} lang={lang} />
+          <div style={{ display: 'flex', gap: 0, padding: '16px', alignItems: 'flex-start' }}>
+            {/* Donut */}
+            <div style={{ position: 'relative', flexShrink: 0, marginRight: 20 }}>
+              <DonutChart
+                data={catBreakdown.slice(0, 9).map(c => ({
+                  v: c.v,
+                  color: selCat === '' || selCat === c.k ? (CAT_COLORS[c.k] ?? 'var(--ink-3)') : 'var(--bg-3)',
+                  label: c.k,
+                }))}
+                size={148}
+                thickness={26}
+              />
+              {/* Center text */}
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                <div className="num privacy-mask" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.02em' }}>
+                  {fmtMoney(selCat ? (byCat[selCat] ?? 0) : catTotal, lang, true)}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--ink-3)', marginTop: 1, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {selCat ? (I18N[lang].categories[selCat] ?? selCat) : (pt ? 'total' : 'total')}
+                </div>
+              </div>
+            </div>
+            {/* Category rows */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {catBreakdown.slice(0, 9).map(c => {
+                const pct = catTotal > 0 ? (c.v / catTotal * 100) : 0;
+                const active = selCat === c.k;
+                const color = CAT_COLORS[c.k] ?? 'var(--ink-3)';
+                return (
+                  <div key={c.k}
+                    onClick={() => setSelCat(active ? '' : c.k)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', borderRadius: 8, cursor: 'pointer', marginBottom: 2,
+                      background: active ? color + '12' : 'transparent',
+                      border: `1.5px solid ${active ? color + '50' : 'transparent'}`,
+                      opacity: selCat && !active ? 0.45 : 1,
+                      transition: 'opacity 0.12s, background 0.12s' }}>
+                    <span className="cat-dot" style={{ background: color, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, fontSize: 12, fontWeight: active ? 600 : 400 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{I18N[lang].categories[c.k] ?? c.k}</span>
+                        <span className="num" style={{ flexShrink: 0, marginLeft: 8, color: active ? 'var(--ink)' : 'var(--ink-2)' }}>{fmtMoney(c.v, lang, true)}</span>
+                      </div>
+                      <div style={{ height: 3, background: 'var(--bg-3)', borderRadius: 99, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 99, transition: 'width 0.3s' }} />
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 10, color: 'var(--ink-3)', flexShrink: 0, minWidth: 28, textAlign: 'right' }}>{pct.toFixed(0)}%</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -322,59 +345,43 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
           <Icon name="search" style={{ width: 13, height: 13, position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', stroke: 'var(--ink-3)', pointerEvents: 'none' }} className="" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
+          <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder={pt ? 'Buscar estabelecimento ou categoria…' : 'Search merchant or category…'}
             style={{ width: '100%', paddingLeft: 30, paddingRight: search ? 30 : 10, height: 34, border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, background: 'var(--bg-2)', color: 'var(--ink)', boxSizing: 'border-box' }}
           />
-          {search && (
-            <button onClick={() => setSearch('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
-          )}
+          {search && <button onClick={() => setSearch('')} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>}
         </div>
-        <select
-          value={sortBy}
-          onChange={e => setSortBy(e.target.value as 'date' | 'amount')}
-          className="field"
-          style={{ height: 34, fontSize: 12, padding: '0 10px', flexShrink: 0 }}
-        >
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as 'date' | 'amount')}
+          className="field" style={{ height: 34, fontSize: 12, padding: '0 10px', flexShrink: 0 }}>
           <option value="date">{pt ? 'Mais recente' : 'Most recent'}</option>
           <option value="amount">{pt ? 'Maior valor' : 'Highest amount'}</option>
         </select>
-        {hasFilters && (
-          <button className="btn ghost sm" onClick={clearFilters}>
-            {pt ? 'Limpar filtros' : 'Clear filters'}
-          </button>
-        )}
+        {hasFilters && <button className="btn ghost sm" onClick={clearFilters}>{pt ? 'Limpar filtros' : 'Clear filters'}</button>}
       </div>
 
       {/* ── Transactions ───────────────────────────────────────────── */}
       <div className="card">
         <div className="card-head">
-          <h3 className="card-title">{pt ? 'Transações' : 'Transactions'}</h3>
+          <h3 className="card-title">
+            {selCat ? (I18N[lang].categories[selCat] ?? selCat) : (pt ? 'Transações' : 'Transactions')}
+          </h3>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {hasFilters && <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{pt ? 'filtrado' : 'filtered'}</span>}
-            <span className="chip-sm">{filtered.length}</span>
+            <span className="chip-sm">{filtered.filter(tx => tx.amt < 0).length}</span>
           </div>
         </div>
         {filtered.length === 0 ? (
           <div style={{ padding: '40px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 12 }}>
-              {pt ? 'Nenhuma transação encontrada' : 'No transactions found'}
-            </div>
-            {hasFilters && (
-              <button className="btn ghost sm" onClick={clearFilters}>{pt ? 'Limpar filtros' : 'Clear filters'}</button>
-            )}
+            <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 12 }}>{pt ? 'Nenhuma transação encontrada' : 'No transactions found'}</div>
+            {hasFilters && <button className="btn ghost sm" onClick={clearFilters}>{pt ? 'Limpar filtros' : 'Clear filters'}</button>}
           </div>
         ) : sortBy === 'amount' ? (
-          /* Flat list when sorted by amount */
           <div>
             {filtered.map((tx, i) => (
               <TxRow key={tx.id ?? i} tx={tx} showAcct={allAccts.length > 1} lang={lang} accent={cardAccent(tx.acct)} last={i === filtered.length - 1} />
             ))}
           </div>
         ) : (
-          /* Grouped by date when sorted by date */
           (() => {
             const byDate: { date: string; rows: typeof filtered }[] = [];
             filtered.forEach(tx => {
@@ -386,7 +393,7 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
               <div>
                 {byDate.map(({ date, rows }, gi) => (
                   <div key={date} style={{ borderTop: gi > 0 ? '1px solid var(--border)' : 'none' }}>
-                    <div style={{ padding: '6px 16px 6px', fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-2)', letterSpacing: '0.04em' }}>
+                    <div style={{ padding: '6px 16px', fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-2)', letterSpacing: '0.04em' }}>
                       {new Date(date + 'T12:00:00').toLocaleDateString(pt ? 'pt-BR' : 'en-US', { weekday: 'short', day: 'numeric', month: 'short' })}
                     </div>
                     {rows.map((tx, ri) => (
@@ -484,8 +491,8 @@ function catFor(text: string, amt: number): { cat: string; sub: string } {
     return { cat: 'income', sub: 'Outros' };
   }
 
-  // Transfer / credit card payment
-  if (/fatura de cart|pgto fat cartao|pagamento fatura|pagto cartão/.test(s)) return { cat: 'transfer', sub: 'Pix enviado' };
+  // Transfer / credit card payment (includes C6 "Pagamento recebido" entries)
+  if (/fatura de cart|pgto fat cartao|pagamento fatura|pagto cartão|pagamento recebido|pgto receb|bill payment/.test(s)) return { cat: 'transfer', sub: 'Pagamento' };
   if (/transf.*pix|pix.*envi|transferência|ted |doc /.test(s)) return { cat: 'transfer', sub: 'Pix enviado' };
 
   // Transport
