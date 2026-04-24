@@ -316,6 +316,7 @@ export function VaultPage({ lang }: VaultPageProps) {
     setVault(v => ({ ...v, lastSave: new Date() }));
     setElapsed(0);
     setTimeout(() => setSaveFlash(false), 1800);
+    (window as any).__vaultSave?.();
   };
 
   return (
@@ -326,10 +327,10 @@ export function VaultPage({ lang }: VaultPageProps) {
           <p className="page-sub">{pt ? "Banco de dados local · criptografado · controle total" : "Local database · encrypted · full control"}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn sm" onClick={() => { setWizardMode("open"); setWizardOpen(true); }}>
+          <button className="btn sm" onClick={() => (window as any).__vaultOpen?.()}>
             <Icon name="link" className="btn-icon" />{pt ? "Abrir vault" : "Open vault"}
           </button>
-          <button className="btn sm" onClick={() => { setWizardMode("new"); setWizardOpen(true); }}>
+          <button className="btn sm" onClick={() => (window as any).__vaultNew?.()}>
             <Icon name="plus" className="btn-icon" />{pt ? "Novo vault" : "New vault"}
           </button>
         </div>
@@ -474,7 +475,7 @@ export function VaultPage({ lang }: VaultPageProps) {
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-head">
           <h3 className="card-title">{pt ? "Vaults recentes" : "Recent vaults"}</h3>
-          <button className="btn sm" onClick={() => { setWizardMode("switch"); setWizardOpen(true); }}>
+          <button className="btn sm" onClick={() => (window as any).__vaultOpen?.()}>
             <Icon name="refresh" className="btn-icon" />{pt ? "Trocar vault" : "Switch vault"}
           </button>
         </div>

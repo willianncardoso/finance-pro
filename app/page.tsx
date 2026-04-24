@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Sidebar, Topbar, TweaksPanel, AppState, type DashLayout } from "./components/shell";
 import { Dashboard } from "./components/dashboard";
 import {
@@ -9,7 +9,7 @@ import {
 } from "./components/pages";
 import { EditDrawer, Toast, ProjectionPage, RecurringPage, VaultPage } from "./components/edit-drawer";
 import { ModalRenderer, ModalState } from "./components/modals";
-import { Txn } from "./lib/data";
+import { Txn, newId } from "./lib/data";
 
 declare global {
   interface Window {
@@ -41,6 +41,66 @@ function loadRoute(): string {
   return localStorage.getItem("fp_route") ?? "dashboard";
 }
 
+/* ─── Vault file helpers (File System Access API + download fallback) ─ */
+
+async function vaultSaveFile(data: object): Promise<FileSystemFileHandle | null> {
+  try {
+    if (typeof (window as any).showSaveFilePicker !== "function") {
+      // Fallback: trigger browser download
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "vault.json";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      return null;
+    }
+    const handle: FileSystemFileHandle = await (window as any).showSaveFilePicker({
+      suggestedName: "vault.json",
+      types: [{ description: "Finance Pro Vault", accept: { "application/json": [".json"] } }],
+    });
+    const writable = await (handle as any).createWritable();
+    await writable.write(JSON.stringify(data, null, 2));
+    await writable.close();
+    return handle;
+  } catch (err: any) {
+    if (err?.name !== "AbortError") console.error("vaultSave:", err);
+    return null;
+  }
+}
+
+async function vaultOpenFile(): Promise<{ handle: FileSystemFileHandle; data: any } | null> {
+  try {
+    if (typeof (window as any).showOpenFilePicker !== "function") {
+      // Fallback: hidden file input
+      return new Promise(resolve => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          if (!file) { resolve(null); return; }
+          const text = await file.text();
+          try { resolve({ handle: null as any, data: JSON.parse(text) }); } catch { resolve(null); }
+        };
+        input.click();
+      });
+    }
+    const [handle]: [FileSystemFileHandle] = await (window as any).showOpenFilePicker({
+      types: [{ description: "Finance Pro Vault", accept: { "application/json": [".json"] } }],
+    });
+    const file = await handle.getFile();
+    const text = await file.text();
+    return { handle, data: JSON.parse(text) };
+  } catch (err: any) {
+    if (err?.name !== "AbortError") console.error("vaultOpen:", err);
+    return null;
+  }
+}
+
+/* ─── Main App ─────────────────────────────────────────────────────── */
+
 export default function Home() {
   const [state, setState] = useState<AppState>(DEFAULT_STATE);
   const [route, setRoute] = useState("dashboard");
@@ -50,6 +110,9 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [txns, setTxns] = useState<Txn[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
+
+  // File handle is a ref — changing it doesn't need a re-render
+  const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
 
   const hasData = txns.length > 0;
 
@@ -93,31 +156,102 @@ export default function Home() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
+  // Wire all window globals. Re-register whenever txns/state changes so closures are fresh.
   useEffect(() => {
     window.__openTxnEdit = (txn: Txn) => setEditTxn(txn);
     (window as any).__navigate = navigate;
+
     (window as any).__toast = (message: string, kind: "success" | "warn" | "danger" = "success") =>
       setToast({ message, kind });
+
     (window as any).__modal = (type: string, data: Record<string, unknown> = {}) =>
       setModal({ type, data });
+
     (window as any).__togglePrivacy = () =>
       setState(prev => ({ ...prev, privacy: !prev.privacy }));
+
+    // Add a new transaction from any modal
+    (window as any).__addTxn = (txn: Omit<Txn, "id">) => {
+      const withId: Txn = { ...txn, id: newId() };
+      setTxns(prev => [withId, ...prev]);
+    };
+
+    // Vault file system
+    (window as any).__vaultSave = async () => {
+      const pt = state.lang === "pt";
+      const payload = { version: "1.0", exportedAt: new Date().toISOString(), txns, state };
+      if (fileHandleRef.current) {
+        // Write to existing handle
+        try {
+          const writable = await (fileHandleRef.current as any).createWritable();
+          await writable.write(JSON.stringify(payload, null, 2));
+          await writable.close();
+          (window as any).__toast?.(pt ? "💾 Vault salvo" : "💾 Vault saved");
+        } catch {
+          fileHandleRef.current = null;
+          (window as any).__vaultSave();
+        }
+        return;
+      }
+      const handle = await vaultSaveFile(payload);
+      if (handle) {
+        fileHandleRef.current = handle;
+        (window as any).__toast?.(pt ? "💾 Vault salvo" : "💾 Vault saved");
+      } else if (typeof (window as any).showSaveFilePicker !== "function") {
+        // Fallback download succeeded
+        (window as any).__toast?.(pt ? "💾 Vault exportado (download)" : "💾 Vault downloaded");
+      }
+    };
+
+    (window as any).__vaultNew = async () => {
+      fileHandleRef.current = null;
+      await (window as any).__vaultSave();
+    };
+
+    (window as any).__vaultOpen = async () => {
+      const pt = state.lang === "pt";
+      const result = await vaultOpenFile();
+      if (!result) return;
+      const { handle, data } = result;
+      if (handle) fileHandleRef.current = handle;
+      if (Array.isArray(data?.txns)) setTxns(data.txns);
+      if (data?.state) setState(prev => ({ ...prev, ...data.state }));
+      (window as any).__toast?.(pt ? "✓ Vault carregado" : "✓ Vault loaded");
+    };
+
     return () => {
       delete window.__openTxnEdit;
       delete (window as any).__navigate;
       delete (window as any).__toast;
       delete (window as any).__modal;
       delete (window as any).__togglePrivacy;
+      delete (window as any).__addTxn;
+      delete (window as any).__vaultSave;
+      delete (window as any).__vaultNew;
+      delete (window as any).__vaultOpen;
     };
-  }, []);
+  }, [txns, state]);
 
   function updateState(patch: Partial<AppState>) {
     setState(prev => ({ ...prev, ...patch }));
   }
 
   function handleSaveTxn(txn: Txn) {
+    setTxns(prev => {
+      if (txn.id) {
+        // Update existing
+        const idx = prev.findIndex(t => t.id === txn.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = txn;
+          return next;
+        }
+      }
+      // Add as new (EditDrawer opened with a blank txn that had no id)
+      return [{ ...txn, id: newId() }, ...prev];
+    });
     setEditTxn(null);
-    setToast({ message: state.lang === "pt" ? "Transação atualizada" : "Transaction updated", kind: "success" });
+    setToast({ message: state.lang === "pt" ? "Transação salva" : "Transaction saved", kind: "success" });
   }
 
   function handleImportComplete(newTxns: Txn[]) {
@@ -158,14 +292,14 @@ export default function Home() {
         {route === "accounts" && (
           <AccountsPage lang={state.lang} onEditTxn={setEditTxn} txns={txns} />
         )}
-        {route === "cards" && <CardsPage lang={state.lang} />}
-        {route === "invest" && <InvestPage lang={state.lang} />}
+        {route === "cards" && <CardsPage lang={state.lang} txns={txns} />}
+        {route === "invest" && <InvestPage lang={state.lang} txns={txns} />}
         {route === "import" && <ImportPage lang={state.lang} onImportComplete={handleImportComplete} />}
-        {route === "insights" && <InsightsPage lang={state.lang} />}
-        {route === "reports" && <ReportsPage lang={state.lang} />}
-        {route === "budget" && <BudgetPage lang={state.lang} />}
-        {route === "categories" && <CategoriesPage lang={state.lang} />}
-        {route === "compare" && <ComparisonPage lang={state.lang} />}
+        {route === "insights" && <InsightsPage lang={state.lang} txns={txns} />}
+        {route === "reports" && <ReportsPage lang={state.lang} txns={txns} />}
+        {route === "budget" && <BudgetPage lang={state.lang} txns={txns} />}
+        {route === "categories" && <CategoriesPage lang={state.lang} txns={txns} />}
+        {route === "compare" && <ComparisonPage lang={state.lang} txns={txns} />}
         {route === "projection" && <ProjectionPage lang={state.lang} />}
         {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} />}
         {route === "settings" && <SettingsPage lang={state.lang} />}

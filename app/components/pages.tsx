@@ -2,7 +2,51 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Icon } from "./icons";
-import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, ACCOUNTS, TXNS, CARDS, INSIGHTS, PORTFOLIO, LEARNED_RULES, CAT_MONTH, CASHFLOW_12M, GOALS, AVENUE_PORTFOLIO, FX, acctBRL, PERIOD_PRESETS, buildPeriodData, PeriodPreset } from "../lib/data";
+import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, ACCOUNTS, TXNS, CARDS, INSIGHTS, PORTFOLIO, LEARNED_RULES, CAT_MONTH, CASHFLOW_12M, GOALS, AVENUE_PORTFOLIO, FX, acctBRL, PERIOD_PRESETS, buildPeriodData, PeriodPreset, newId } from "../lib/data";
+
+/* ─── Helpers that derive stats from real transaction data ─── */
+
+function computeStats(txns: Txn[]) {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ym = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  const thisM = ym(now);
+  const prevM = ym(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+
+  const thisMo = txns.filter(t => t.d.startsWith(thisM));
+  const prevMo = txns.filter(t => t.d.startsWith(prevM));
+
+  const income = thisMo.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
+  const expense = Math.abs(thisMo.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
+  const prevExpense = Math.abs(prevMo.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
+  const incomeAll = txns.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
+  const expenseAll = Math.abs(txns.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
+
+  const byCat: Record<string, number> = {};
+  const prevByCat: Record<string, number> = {};
+  thisMo.filter(t => t.amt < 0 && t.cat).forEach(t => { byCat[t.cat] = (byCat[t.cat] || 0) + Math.abs(t.amt); });
+  prevMo.filter(t => t.amt < 0 && t.cat).forEach(t => { prevByCat[t.cat] = (prevByCat[t.cat] || 0) + Math.abs(t.amt); });
+
+  const catSummary = Object.entries(byCat)
+    .map(([k, cur]) => ({ k, cur, prev: prevByCat[k] || 0, budget: 0 }))
+    .sort((a, b) => b.cur - a.cur);
+
+  // Monthly cashflow (last 12 months)
+  const byMonth: Record<string, { income: number; expense: number }> = {};
+  txns.forEach(t => {
+    const m = t.d.slice(0, 7);
+    if (!byMonth[m]) byMonth[m] = { income: 0, expense: 0 };
+    if (t.amt > 0) byMonth[m].income += t.amt;
+    else byMonth[m].expense += Math.abs(t.amt);
+  });
+  const cashflow = Object.entries(byMonth)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([, v], i) => ({ m: i + 1, income: v.income, expense: v.expense }));
+
+  const topCat = catSummary[0]?.k ?? null;
+  return { income, expense, prevExpense, net: income - expense, catSummary, cashflow, topCat, incomeAll, expenseAll };
+}
 import { InsightCard } from "./shell";
 import { Sparkline, DonutChart, CashflowChart, BarList, AllocBar, FXBar } from "./charts";
 
@@ -38,7 +82,7 @@ const CARD_TXNS = [
 ];
 
 /* ============ CARDS ============ */
-export function CardsPage({ lang }: { lang: Lang }) {
+export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const [selected, setSelected] = useState(CARDS[1]);
   const pct = selected.limit > 0 ? (selected.used / selected.limit) * 100 : 0;
@@ -188,7 +232,7 @@ export function CardsPage({ lang }: { lang: Lang }) {
 }
 
 /* ============ INVESTMENTS ============ */
-export function InvestPage({ lang }: { lang: Lang }) {
+export function InvestPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const [activeTab, setActiveTab] = useState("br");
   const total = PORTFOLIO.reduce((s, p) => s + (p.q > 1 ? p.q * p.last : p.last), 0);
@@ -602,7 +646,7 @@ function parseC6CSV(content: string): Txn[] {
     const saida = parseFloat(saidaStr) || 0;
     if (entrada === 0 && saida === 0) continue;
     const amt = entrada > 0 ? entrada : -saida;
-    txns.push({ d, merch: c6Merchant(titulo, descricao), cat: c6Category(titulo, descricao, amt), acct: 'C6 Bank', amt });
+    txns.push({ id: newId(), d, merch: c6Merchant(titulo, descricao), cat: c6Category(titulo, descricao, amt), acct: 'C6 Bank', amt });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -883,13 +927,54 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
 }
 
 /* ============ INSIGHTS ============ */
-export function InsightsPage({ lang }: { lang: Lang }) {
+export function InsightsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const [filter, setFilter] = useState("all");
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
   const [snoozed, setSnoozed] = useState<Set<number>>(new Set());
 
-  const allInsights = INSIGHTS[lang];
+  if (!txns.length) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <h1 className="page-title">{t.nav_insights}</h1>
+            <div className="page-sub">{lang === "pt" ? "Análises automáticas baseadas nos seus dados" : "Automatic analyses based on your data"}</div>
+          </div>
+        </div>
+        <EmptyState icon="insight" title={lang === "pt" ? "Sem insights ainda" : "No insights yet"}
+          sub={lang === "pt" ? "Importe suas transações para receber análises automáticas de gastos, alertas e oportunidades de economia." : "Import your transactions to get automatic spending analyses, alerts, and savings opportunities."}
+          cta={lang === "pt" ? "Importar transações" : "Import transactions"}
+          onCta={() => (window as any).__navigate?.("import")} />
+      </div>
+    );
+  }
+
+  // Generate insights from real transaction data
+  const stats = computeStats(txns);
+  const generated = [] as Array<{ kind: "warn" | "danger" | "pos" | "info"; t: string; x: string; tag: string; when: string }>;
+
+  if (stats.topCat) {
+    generated.push({ kind: "info", t: `${I18N[lang].categories[stats.topCat] ?? stats.topCat}`, x: lang === "pt" ? `Sua maior categoria de gasto este mês: ${fmtMoney(stats.catSummary[0].cur, lang, true)}` : `Your top spending category this month: ${fmtMoney(stats.catSummary[0].cur, lang, true)}`, tag: lang === "pt" ? "Automático" : "Auto", when: lang === "pt" ? "este mês" : "this month" });
+  }
+  if (stats.expense > 0) {
+    generated.push({ kind: stats.income > 0 && stats.net >= 0 ? "pos" : "warn", t: lang === "pt" ? `${fmtMoney(stats.expense, lang, true)} gastos este mês` : `${fmtMoney(stats.expense, lang, true)} spent this month`, x: lang === "pt" ? `Receita: ${fmtMoney(stats.income, lang, true)} · Líquido: ${fmtMoney(stats.net, lang, true)}` : `Income: ${fmtMoney(stats.income, lang, true)} · Net: ${fmtMoney(stats.net, lang, true)}`, tag: lang === "pt" ? "Fluxo" : "Cashflow", when: lang === "pt" ? "este mês" : "this month" });
+  }
+  if (stats.prevExpense > 0 && stats.expense > 0) {
+    const delta = ((stats.expense - stats.prevExpense) / stats.prevExpense * 100);
+    const isOver = delta > 0;
+    generated.push({ kind: isOver ? "warn" : "pos", t: lang === "pt" ? `Gastos ${isOver ? "aumentaram" : "reduziram"} ${Math.abs(delta).toFixed(1)}% vs. mês anterior` : `Expenses ${isOver ? "up" : "down"} ${Math.abs(delta).toFixed(1)}% vs. last month`, x: lang === "pt" ? `Mês anterior: ${fmtMoney(stats.prevExpense, lang, true)}` : `Last month: ${fmtMoney(stats.prevExpense, lang, true)}`, tag: "Δ Mensal", when: lang === "pt" ? "comparando" : "comparing" });
+  }
+  stats.catSummary.slice(0, 3).forEach(c => {
+    if (c.prev > 0 && c.cur > c.prev * 1.3) {
+      generated.push({ kind: "warn", t: lang === "pt" ? `${I18N[lang].categories[c.k]}: +${((c.cur/c.prev-1)*100).toFixed(0)}% vs. mês anterior` : `${I18N[lang].categories[c.k]}: +${((c.cur/c.prev-1)*100).toFixed(0)}% vs. last month`, x: lang === "pt" ? `${fmtMoney(c.prev, lang, true)} → ${fmtMoney(c.cur, lang, true)}` : `${fmtMoney(c.prev, lang, true)} → ${fmtMoney(c.cur, lang, true)}`, tag: lang === "pt" ? "Alta" : "Spike", when: lang === "pt" ? "este mês" : "this month" });
+    }
+  });
+  if (stats.income > 0 && stats.net > 0) {
+    generated.push({ kind: "pos", t: lang === "pt" ? `Taxa de poupança: ${(stats.net/stats.income*100).toFixed(1)}%` : `Savings rate: ${(stats.net/stats.income*100).toFixed(1)}%`, x: lang === "pt" ? `Parabéns! Você poupou ${fmtMoney(stats.net, lang, true)} este mês.` : `Great job! You saved ${fmtMoney(stats.net, lang, true)} this month.`, tag: lang === "pt" ? "Poupança" : "Savings", when: lang === "pt" ? "este mês" : "this month" });
+  }
+
+  const allInsights = generated;
   const visible = allInsights.filter((ins, i) =>
     !dismissed.has(i) && !snoozed.has(i) && (filter === "all" || ins.kind === filter)
   );
@@ -949,10 +1034,10 @@ export function InsightsPage({ lang }: { lang: Lang }) {
               {lang === "pt" ? "Resumo do mês" : "Month summary"}
             </div>
             {[
-              { l: lang === "pt" ? "Alertas gerados" : "Alerts generated", v: 23 },
-              { l: lang === "pt" ? "Ações aplicadas" : "Actions applied", v: 14, accent: true },
-              { l: lang === "pt" ? "Economia sugerida" : "Suggested savings", v: lang === "pt" ? "R$ 1.840" : "$1,840", accent: true },
-              { l: lang === "pt" ? "Tempo poupado" : "Time saved", v: "4.2h" },
+              { l: lang === "pt" ? "Insights gerados" : "Insights generated", v: generated.length },
+              { l: lang === "pt" ? "Gastos este mês" : "Spent this month", v: fmtMoney(stats.expense, lang, true), accent: true },
+              { l: lang === "pt" ? "Receita este mês" : "Income this month", v: fmtMoney(stats.income, lang, true), accent: true },
+              { l: lang === "pt" ? "Líquido" : "Net", v: fmtMoney(stats.net, lang, true) },
             ].map((r, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < 3 ? "1px solid var(--border)" : "none" }}>
                 <span style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.l}</span>
@@ -983,10 +1068,28 @@ export function InsightsPage({ lang }: { lang: Lang }) {
 }
 
 /* ============ REPORTS ============ */
-export function ReportsPage({ lang }: { lang: Lang }) {
+export function ReportsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const [period, setPeriod] = useState<"30d" | "90d" | "12m" | "ytd">("90d");
-  const catTotal = CAT_MONTH.reduce((s, c) => s + c.cur, 0);
+
+  if (!txns.length) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div><h1 className="page-title">{t.nav_reports}</h1><div className="page-sub">{lang === "pt" ? "Relatórios customizáveis · exporte em PDF/CSV" : "Custom reports · export as PDF/CSV"}</div></div>
+        </div>
+        <EmptyState icon="report" title={lang === "pt" ? "Sem dados para relatório" : "No report data"}
+          sub={lang === "pt" ? "Importe suas transações para visualizar relatórios de fluxo de caixa, gastos por categoria e comparativos mensais." : "Import your transactions to view cashflow reports, category breakdowns, and monthly comparisons."}
+          cta={lang === "pt" ? "Importar transações" : "Import transactions"}
+          onCta={() => (window as any).__navigate?.("import")} />
+      </div>
+    );
+  }
+
+  const stats = computeStats(txns);
+  const catData = stats.catSummary;
+  const catTotal = catData.reduce((s, c) => s + c.cur, 0);
+  const savingsRate = stats.income > 0 ? (stats.net / stats.income * 100) : 0;
 
   return (
     <div className="page">
@@ -1010,10 +1113,10 @@ export function ReportsPage({ lang }: { lang: Lang }) {
 
       <div className="grid g-4" style={{ marginBottom: 14 }}>
         {[
-          { l: lang === "pt" ? "Receita total" : "Total income", v: fmtMoney(58400, lang, true), d: { pos: true, text: "+8.2%" }, s: "90d" },
-          { l: lang === "pt" ? "Gastos totais" : "Total expense", v: fmtMoney(44680, lang, true), d: { pos: false, text: "+14.1%" }, s: "90d" },
-          { l: lang === "pt" ? "Saldo líquido" : "Net", v: fmtMoney(13720, lang, true), d: { pos: false, text: "-12.4%" }, s: "90d" },
-          { l: lang === "pt" ? "Taxa de poupança" : "Savings rate", v: "23.5%", d: { pos: false, text: "-6.1pp" }, s: "90d" },
+          { l: lang === "pt" ? "Receita" : "Income", v: fmtMoney(stats.income, lang, true), d: { pos: true, text: lang === "pt" ? "este mês" : "this month" }, s: "" },
+          { l: lang === "pt" ? "Gastos" : "Expenses", v: fmtMoney(stats.expense, lang, true), d: { pos: stats.expense <= stats.prevExpense, text: stats.prevExpense > 0 ? `${((stats.expense-stats.prevExpense)/stats.prevExpense*100).toFixed(1)}%` : "—" }, s: "" },
+          { l: lang === "pt" ? "Líquido" : "Net", v: fmtMoney(stats.net, lang, true), d: { pos: stats.net >= 0, text: lang === "pt" ? "este mês" : "this month" }, s: "" },
+          { l: lang === "pt" ? "Taxa de poupança" : "Savings rate", v: stats.income > 0 ? `${savingsRate.toFixed(1)}%` : "—", d: { pos: savingsRate >= 20, text: stats.income > 0 ? (savingsRate >= 20 ? "✓ boa" : "↓ baixa") : "—" }, s: "" },
         ].map((k, i) => (
           <div key={i} className="kpi">
             <div className="kpi-label">{k.l}</div>
@@ -1035,7 +1138,7 @@ export function ReportsPage({ lang }: { lang: Lang }) {
             <h3 className="card-title">{lang === "pt" ? "Fluxo de caixa · 12 meses" : "Cash flow · 12 months"}</h3>
           </div>
           <div className="card-pad">
-            <CashflowChart data={CASHFLOW_12M} lang={lang} showAnnotations={false} />
+            <CashflowChart data={stats.cashflow.length ? stats.cashflow : CASHFLOW_12M} lang={lang} showAnnotations={false} />
           </div>
         </div>
         <div className="card">
@@ -1043,13 +1146,13 @@ export function ReportsPage({ lang }: { lang: Lang }) {
             <h3 className="card-title">{lang === "pt" ? "Distribuição por categoria" : "Category distribution"}</h3>
           </div>
           <div className="card-pad" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <DonutChart data={CAT_MONTH.map(c => ({ v: c.cur, color: CAT_COLORS[c.k] }))} size={150} />
+            <DonutChart data={catData.slice(0, 8).map(c => ({ v: c.cur, color: CAT_COLORS[c.k] ?? "var(--ink-3)" }))} size={150} />
             <div style={{ flex: 1 }}>
-              {CAT_MONTH.slice(0, 6).map(c => (
+              {catData.slice(0, 6).map(c => (
                 <div key={c.k} style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 0", fontSize: 11.5 }}>
-                  <span style={{ width: 7, height: 7, background: CAT_COLORS[c.k], borderRadius: 2 }} />
-                  <span>{I18N[lang].categories[c.k]}</span>
-                  <span className="num muted" style={{ marginLeft: "auto" }}>{(c.cur / catTotal * 100).toFixed(1)}%</span>
+                  <span style={{ width: 7, height: 7, background: CAT_COLORS[c.k] ?? "var(--ink-3)", borderRadius: 2 }} />
+                  <span>{I18N[lang].categories[c.k] ?? c.k}</span>
+                  <span className="num muted" style={{ marginLeft: "auto" }}>{catTotal > 0 ? (c.cur / catTotal * 100).toFixed(1) : "0"}%</span>
                 </div>
               ))}
             </div>
@@ -1072,19 +1175,19 @@ export function ReportsPage({ lang }: { lang: Lang }) {
             <th className="r">Δ {lang === "pt" ? "anterior" : "prev"}</th>
           </tr></thead>
           <tbody>
-            {CASHFLOW_12M.slice(6).map((m, i) => {
+            {stats.cashflow.slice(-6).map((m, i, arr) => {
               const net = m.income - m.expense;
-              const rate = (net / m.income * 100).toFixed(1);
-              const prev = i > 0 ? CASHFLOW_12M[6 + i - 1].expense : m.expense;
-              const delta = ((m.expense - prev) / prev * 100).toFixed(1);
+              const rate = m.income > 0 ? (net / m.income * 100).toFixed(1) : "—";
+              const prev = i > 0 ? arr[i - 1].expense : m.expense;
+              const delta = prev > 0 ? ((m.expense - prev) / prev * 100).toFixed(1) : "0";
               return (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{I18N[lang].months[m.m]} / 2026</td>
+                  <td style={{ fontWeight: 600 }}>{lang === "pt" ? `Mês ${m.m}` : `Month ${m.m}`}</td>
                   <td className="r num pos">{fmtMoney(m.income, lang, true)}</td>
                   <td className="r num">{fmtMoney(m.expense, lang, true)}</td>
                   <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(net, lang, true)}</td>
                   <td className="r num">{rate}%</td>
-                  <td><span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS.housing }} />{I18N[lang].categories.housing}</span></td>
+                  <td>{stats.topCat ? <span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[stats.topCat] }} />{I18N[lang].categories[stats.topCat] ?? stats.topCat}</span> : "—"}</td>
                   <td className={"r num " + (Number(delta) > 0 ? "neg" : "pos")}>{Number(delta) > 0 ? "+" : ""}{delta}%</td>
                 </tr>
               );
@@ -1097,11 +1200,29 @@ export function ReportsPage({ lang }: { lang: Lang }) {
 }
 
 /* ============ BUDGET ============ */
-export function BudgetPage({ lang }: { lang: Lang }) {
+export function BudgetPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
-  const totalSpent = 17240;
-  const totalBudget = 13600;
-  const overPct = ((totalSpent - totalBudget) / totalBudget * 100).toFixed(1);
+
+  if (!txns.length) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div><h1 className="page-title">{t.nav_budget}</h1><div className="page-sub">{lang === "pt" ? "Orçamento mensal + metas de longo prazo" : "Monthly budget + long-term goals"}</div></div>
+          <button className="btn primary sm" onClick={() => (window as any).__modal?.("goal", {})}><Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova meta" : "New goal"}</button>
+        </div>
+        <EmptyState icon="target" title={lang === "pt" ? "Sem dados de orçamento" : "No budget data"}
+          sub={lang === "pt" ? "Importe suas transações para visualizar gastos por categoria e monitorar seu orçamento mensal." : "Import your transactions to see category spending and monitor your monthly budget."}
+          cta={lang === "pt" ? "Importar transações" : "Import transactions"}
+          onCta={() => (window as any).__navigate?.("import")} />
+      </div>
+    );
+  }
+
+  const stats = computeStats(txns);
+  const catData = stats.catSummary;
+  const totalSpent = stats.expense;
+  const totalBudget = 0; // No budget set yet
+  const overBudget = catData.filter(c => c.budget > 0 && c.cur > c.budget);
 
   return (
     <div className="page">
@@ -1118,11 +1239,11 @@ export function BudgetPage({ lang }: { lang: Lang }) {
       <div className="grid" style={{ gridTemplateColumns: "1.4fr 1fr", gap: 14, marginBottom: 14 }}>
         <div className="card">
           <div className="card-head">
-            <h3 className="card-title">{t.section_budget} · {I18N[lang].months[3]}</h3>
-            <span className="pill warn">2 {lang === "pt" ? "estouradas" : "over budget"}</span>
+            <h3 className="card-title">{t.section_budget} · {lang === "pt" ? "este mês" : "this month"}</h3>
+            {overBudget.length > 0 && <span className="pill warn">{overBudget.length} {lang === "pt" ? "estouradas" : "over budget"}</span>}
           </div>
           <div className="card-pad">
-            <BarList items={CAT_MONTH} lang={lang} onClickItem={() => (window as any).__toast?.(lang === "pt" ? "Edição de orçamento: em breve" : "Budget editing: coming soon", "info")} />
+            <BarList items={catData} lang={lang} onClickItem={k => (window as any).__modal?.("budgetedit", { catKey: k })} />
           </div>
         </div>
         <div className="card card-pad">
@@ -1131,22 +1252,25 @@ export function BudgetPage({ lang }: { lang: Lang }) {
           </div>
           <div style={{ marginBottom: 14 }}>
             <div className="num" style={{ fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em" }}>
-              {fmtMoney(totalSpent, lang)} / {fmtMoney(totalBudget, lang)}
+              {fmtMoney(totalSpent, lang, true)}
             </div>
-            <div style={{ fontSize: 12, color: "var(--danger)", fontWeight: 500, marginTop: 2 }}>
-              {overPct}% {lang === "pt" ? "acima do orçamento" : "over budget"}
+            <div style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 2 }}>
+              {lang === "pt" ? `${catData.length} categorias · este mês` : `${catData.length} categories · this month`}
             </div>
           </div>
           <div className="pbar" style={{ height: 10, marginBottom: 14 }}>
-            <div className="pbar-fill" style={{ width: "100%", background: "var(--danger)" }} />
+            <div className="pbar-fill" style={{ width: "100%", background: "var(--accent)" }} />
           </div>
-          <div style={{ padding: 12, background: "var(--warn-bg)", borderRadius: 8, fontSize: 11.5, lineHeight: 1.55, color: "var(--warn-fg)" }}>
-            <strong>{lang === "pt" ? "Categorias estouradas:" : "Over-budget categories:"}</strong>
-            <div style={{ marginTop: 5 }}>
-              • {I18N[lang].categories.rest}: +{fmtMoney(442, lang)} (31%)<br />
-              • {I18N[lang].categories.shopping}: +{fmtMoney(1120, lang)} (56%)
+          {catData.length > 0 && (
+            <div style={{ padding: 12, background: "var(--bg-2)", borderRadius: 8, fontSize: 11.5, lineHeight: 1.7, color: "var(--ink-2)" }}>
+              <strong>{lang === "pt" ? "Top categorias:" : "Top categories:"}</strong>
+              <div style={{ marginTop: 5 }}>
+                {catData.slice(0, 3).map((c, i) => (
+                  <div key={i}>• {I18N[lang].categories[c.k] ?? c.k}: {fmtMoney(c.cur, lang, true)}</div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -1318,8 +1442,11 @@ export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEdi
 }
 
 /* ============ CATEGORIES ============ */
-export function CategoriesPage({ lang }: { lang: Lang }) {
+export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
+  const stats = computeStats(txns);
+  const spendByCat = Object.fromEntries(stats.catSummary.map(c => [c.k, c.cur]));
+
   return (
     <div className="page">
       <div className="page-head">
@@ -1327,7 +1454,7 @@ export function CategoriesPage({ lang }: { lang: Lang }) {
           <h1 className="page-title">{t.nav_categories}</h1>
           <div className="page-sub">{lang === "pt" ? "Regras automáticas + categorias personalizadas" : "Automatic rules + custom categories"}</div>
         </div>
-        <button className="btn primary sm" onClick={() => (window as any).__toast?.(lang === "pt" ? "Nova categoria manual: em breve" : "Custom category: coming soon", "warn")}>
+        <button className="btn primary sm" onClick={() => (window as any).__modal?.("category", {})}>
           <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova categoria" : "New category"}
         </button>
       </div>
@@ -1361,7 +1488,7 @@ export function CategoriesPage({ lang }: { lang: Lang }) {
 
       <div className="grid g-3" style={{ gap: 14 }}>
         {Object.keys(I18N[lang].categories).map(k => {
-          const cur = CAT_MONTH.find(c => c.k === k);
+          const cur = txns.length ? { cur: spendByCat[k] ?? 0 } : CAT_MONTH.find(c => c.k === k);
           const ruleCount = LEARNED_RULES.filter(r => r.cat === k).length;
           return (
             <div key={k} className="card card-pad">
@@ -1376,7 +1503,7 @@ export function CategoriesPage({ lang }: { lang: Lang }) {
                 <>
                   <div className="num" style={{ fontSize: 18, fontWeight: 600 }}>{fmtMoney(cur.cur, lang, true)}</div>
                   <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 6 }}>{lang === "pt" ? "este mês" : "this month"}</div>
-                  <Sparkline data={[cur.prev * 0.8, cur.prev * 0.9, cur.prev, cur.prev * 1.05, cur.prev * 1.1, cur.cur * 0.95, cur.cur]} w={240} h={28} color={CAT_COLORS[k] ?? "var(--ink-3)"} />
+                  <Sparkline data={[cur.cur * 0.7, cur.cur * 0.85, cur.cur * 0.9, cur.cur * 0.95, cur.cur * 0.98, cur.cur * 0.99, cur.cur]} w={240} h={28} color={CAT_COLORS[k] ?? "var(--ink-3)"} />
                 </>
               ) : (
                 <div style={{ fontSize: 11, color: "var(--ink-4)" }}>{lang === "pt" ? "sem gastos este mês" : "no spend this month"}</div>
@@ -1425,7 +1552,7 @@ function ComparisonBars({ dA, dB, pA, pB, lang }: { dA: ReturnType<typeof buildP
   );
 }
 
-export function ComparisonPage({ lang }: { lang: Lang }) {
+export function ComparisonPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const presets = PERIOD_PRESETS[lang];
   const [selA, setSelA] = useState("mar");
   const [selB, setSelB] = useState("apr");

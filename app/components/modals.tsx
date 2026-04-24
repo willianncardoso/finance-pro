@@ -97,7 +97,19 @@ function NewTransactionModal({ lang, onClose }: { lang: Lang; onClose: () => voi
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm(f => ({ ...f, [k]: v }));
 
   const save = () => {
-    (window as any).__toast?.(pt ? `✓ Transação adicionada` : `✓ Transaction added`);
+    const txn = {
+      d: form.date,
+      merch: form.merch || (pt ? "Sem título" : "Untitled"),
+      cat: form.cat,
+      sub: form.sub || undefined,
+      acct: form.acct,
+      amt: form.type === "expense" ? -Math.abs(Number(form.amt) || 0) : Math.abs(Number(form.amt) || 0),
+      notes: form.notes || undefined,
+      recurring: form.recurring || undefined,
+      reimbursable: form.reimbursable || undefined,
+    };
+    (window as any).__addTxn?.(txn);
+    (window as any).__toast?.(pt ? `✓ Transação "${txn.merch}" adicionada` : `✓ Transaction "${txn.merch}" added`);
     onClose();
   };
 
