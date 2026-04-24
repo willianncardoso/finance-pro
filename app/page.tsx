@@ -237,6 +237,12 @@ export default function Home() {
       setTxns(prev => prev.map(t => t.cat === cat && t.sub === oldSub ? { ...t, sub: newSub } : t));
     };
 
+    // Mark all txns from a merchant as recurring=true
+    (window as any).__markRecurring = (merch: string) => {
+      const norm = merch.toLowerCase().replace(/[^a-z0-9]/g, '');
+      setTxns(prev => prev.map(t => t.merch.toLowerCase().replace(/[^a-z0-9]/g, '') === norm ? { ...t, recurring: true } : t));
+    };
+
     // Vault file system
     (window as any).__vaultSave = async () => {
       const pt = state.lang === "pt";
@@ -289,6 +295,7 @@ export default function Home() {
       delete (window as any).__addTxn;
       delete (window as any).__updateTxn;
       delete (window as any).__bulkUpdateSub;
+      delete (window as any).__markRecurring;
       delete (window as any).__vaultSave;
       delete (window as any).__vaultNew;
       delete (window as any).__vaultOpen;

@@ -955,14 +955,53 @@ function detectRecurring(txns: Txn[]): Array<{ merch: string; cat: string; sub: 
   return result.sort((a, b) => a.merch.localeCompare(b.merch));
 }
 
+function recurringKey(merch: string): string {
+  return merch.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function loadDismissed(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem('fp_recurring_dismissed') ?? '[]')); } catch { return new Set(); }
+}
+function saveDismissed(s: Set<string>) {
+  try { localStorage.setItem('fp_recurring_dismissed', JSON.stringify([...s])); } catch {}
+}
+
 export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps) {
   const pt = lang === "pt";
   const [tab, setTab] = useState<"recurring" | "installments">("recurring");
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [showDismissed, setShowDismissed] = useState(false);
 
-  const installments = detectInstallments(txns);
-  const recurring = detectRecurring(txns);
+  useEffect(() => { setDismissed(loadDismissed()); }, []);
 
-  const current = tab === "recurring" ? recurring : installments;
+  const allInstallments = detectInstallments(txns);
+  const allRecurring = detectRecurring(txns);
+
+  // Split recurring into active vs dismissed
+  const activeRecurring = allRecurring.filter(r => !dismissed.has(recurringKey(r.merch)));
+  const dismissedRecurring = allRecurring.filter(r => dismissed.has(recurringKey(r.merch)));
+
+  // Track which merchants are confirmed recurring (have recurring=true on any txn)
+  const confirmedKeys = new Set(txns.filter(t => t.recurring).map(t => recurringKey(t.merch)));
+
+  function dismiss(merch: string) {
+    const next = new Set(dismissed);
+    next.add(recurringKey(merch));
+    setDismissed(next);
+    saveDismissed(next);
+  }
+  function restore(merch: string) {
+    const next = new Set(dismissed);
+    next.delete(recurringKey(merch));
+    setDismissed(next);
+    saveDismissed(next);
+  }
+  function confirm(merch: string) {
+    (window as any).__markRecurring?.(merch);
+    (window as any).__toast?.(pt ? `✓ "${merch}" marcado como recorrente` : `✓ "${merch}" marked as recurring`);
+  }
+
+  const displayRecurring = showDismissed ? dismissedRecurring : activeRecurring;
+  const displayInstallments = allInstallments;
 
   return (
     <div className="page">
@@ -971,40 +1010,128 @@ export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps
           <h1 className="page-title">{I18N[lang].nav_recurring}</h1>
           <p className="page-sub">
             {tab === "recurring"
-              ? `${recurring.length} ${pt ? "detectado(s) automaticamente" : "detected automatically"}`
-              : `${installments.length} ${pt ? "parcelamento(s) ativo(s)" : "active installment(s)"}`}
+              ? `${activeRecurring.length} ${pt ? "ativo(s)" : "active"}${dismissedRecurring.length > 0 ? ` · ${dismissedRecurring.length} ${pt ? "ignorado(s)" : "ignored"}` : ""}`
+              : `${allInstallments.length} ${pt ? "parcelamento(s) ativo(s)" : "active installment(s)"}`}
           </p>
         </div>
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
         <button className={"btn sm" + (tab === "recurring" ? " primary" : "")} onClick={() => setTab("recurring")}>
-          {pt ? "Recorrentes" : "Recurring"} {recurring.length > 0 && <span className="chip-sm" style={{ marginLeft: 4 }}>{recurring.length}</span>}
+          {pt ? "Recorrentes" : "Recurring"}
+          {activeRecurring.length > 0 && <span className="chip-sm" style={{ marginLeft: 4 }}>{activeRecurring.length}</span>}
         </button>
         <button className={"btn sm" + (tab === "installments" ? " primary" : "")} onClick={() => setTab("installments")}>
-          {pt ? "Parcelamentos" : "Installments"} {installments.length > 0 && <span className="chip-sm" style={{ marginLeft: 4 }}>{installments.length}</span>}
+          {pt ? "Parcelamentos" : "Installments"}
+          {allInstallments.length > 0 && <span className="chip-sm" style={{ marginLeft: 4 }}>{allInstallments.length}</span>}
         </button>
+        {tab === "recurring" && dismissedRecurring.length > 0 && (
+          <button className="btn ghost sm" style={{ marginLeft: "auto", fontSize: 11, opacity: 0.65 }}
+            onClick={() => setShowDismissed(v => !v)}>
+            {showDismissed
+              ? (pt ? "← Voltar" : "← Back")
+              : (pt ? `Ver ${dismissedRecurring.length} ignorado(s)` : `View ${dismissedRecurring.length} ignored`)}
+          </button>
+        )}
       </div>
 
-      {current.length === 0 ? (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
-          <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
-          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
-            {tab === "recurring" ? (pt ? "Nenhum recorrente detectado" : "No recurring items detected") : (pt ? "Nenhum parcelamento ativo" : "No installments yet")}
+      {tab === "recurring" && (
+        <>
+          {!showDismissed && (
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 10, lineHeight: 1.5 }}>
+              {pt
+                ? "Detectados automaticamente. Confirme os que são de fato recorrentes ou ignore os que não são."
+                : "Auto-detected. Confirm the ones that are truly recurring, or dismiss the ones that aren't."}
+            </div>
+          )}
+          {displayRecurring.length === 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
+              <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
+              <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
+                {showDismissed
+                  ? (pt ? "Nenhum item ignorado" : "No ignored items")
+                  : (pt ? "Nenhum recorrente detectado" : "No recurring items detected")}
+              </div>
+              <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
+                {pt ? "Transações com o mesmo estabelecimento em 2+ meses são detectadas como recorrentes." : "Transactions with the same merchant in 2+ months are detected as recurring."}
+              </div>
+            </div>
+          ) : (
+            <div className="card">
+              {displayRecurring.map((item, i) => {
+                const key = recurringKey(item.merch);
+                const isConfirmed = confirmedKeys.has(key);
+                const isDismissed = dismissed.has(key);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: i < displayRecurring.length - 1 ? "1px solid var(--border)" : "none" }}>
+                    {/* Confirmed indicator */}
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: isConfirmed ? "var(--pos, #22c55e)" : "var(--bg-3)", border: isConfirmed ? "none" : "1.5px solid var(--border)" }} />
+                    <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
+                      onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                        {item.acct} · {item.sub || item.cat} · {item.months} {pt ? "meses" : "months"}
+                        {isConfirmed && <span style={{ marginLeft: 6, color: "var(--pos, #22c55e)", fontWeight: 600 }}>✓ {pt ? "confirmado" : "confirmed"}</span>}
+                      </div>
+                    </div>
+                    <div className="num" style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                      {fmtMoney(item.amt, lang)}
+                    </div>
+                    {isDismissed ? (
+                      <button
+                        className="btn ghost sm"
+                        style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
+                        title={pt ? "Restaurar" : "Restore"}
+                        onClick={() => restore(item.merch)}
+                      >
+                        {pt ? "Restaurar" : "Restore"}
+                      </button>
+                    ) : (
+                      <>
+                        {!isConfirmed && (
+                          <button
+                            className="btn sm"
+                            style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
+                            title={pt ? "Confirmar como recorrente" : "Confirm as recurring"}
+                            onClick={e => { e.stopPropagation(); confirm(item.merch); }}
+                          >
+                            {pt ? "Confirmar" : "Confirm"}
+                          </button>
+                        )}
+                        <button
+                          className="btn ghost sm"
+                          style={{ padding: "3px 6px", flexShrink: 0, opacity: 0.5 }}
+                          title={pt ? "Não é recorrente — ignorar" : "Not recurring — dismiss"}
+                          onClick={e => { e.stopPropagation(); dismiss(item.merch); }}
+                        >
+                          <Icon name="x" style={{ width: 13, height: 13, stroke: "currentColor" }} className="" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === "installments" && (
+        displayInstallments.length === 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
+            <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>{pt ? "Nenhum parcelamento ativo" : "No installments yet"}</div>
+            <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
+              {pt ? "Parcelamentos são detectados ao importar faturas de cartão com campos de parcela (ex: 3/12)." : "Installments are detected when importing card bills with installment fields (e.g. 3/12)."}
+            </div>
           </div>
-          <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
-            {tab === "recurring"
-              ? (pt ? "Transações com o mesmo estabelecimento em 2+ meses são detectadas como recorrentes." : "Transactions with the same merchant in 2+ months are detected as recurring.")
-              : (pt ? "Parcelamentos são detectados ao importar faturas de cartão com campos de parcela (ex: 3/12)." : "Installments are detected when importing card bills with installment fields (e.g. 3/12).")}
-          </div>
-        </div>
-      ) : (
-        <div className="card">
-          {tab === "installments" ? (
-            (installments as typeof installments).map((item, i) => {
+        ) : (
+          <div className="card">
+            {displayInstallments.map((item, i) => {
               const pct = item.total > 0 ? (item.current / item.total) * 100 : 0;
               const remaining = item.total - item.current;
               return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < installments.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < displayInstallments.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
                   onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
@@ -1021,24 +1148,9 @@ export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps
                   </div>
                 </div>
               );
-            })
-          ) : (
-            (recurring as typeof recurring).map((item, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < recurring.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
-                onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                    {item.acct} · {item.sub || item.cat} · {item.months} {pt ? "meses" : "months"}
-                  </div>
-                </div>
-                <div className="num" style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
-                  {fmtMoney(item.amt, lang)}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+            })}
+          </div>
+        )
       )}
     </div>
   );
