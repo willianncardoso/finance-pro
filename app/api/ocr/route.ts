@@ -1,4 +1,9 @@
-import { createWorker } from 'tesseract.js';
+// Use createRequire so Turbopack never tries to statically analyze tesseract.js.
+// The import resolves at Node.js runtime, not at bundle time.
+import { createRequire } from 'node:module';
+const _require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { createWorker } = _require('tesseract.js') as any;
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 
