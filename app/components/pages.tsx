@@ -960,129 +960,6 @@ function parseGenericCSV(content: string, acct = 'Importado', sep = ','): Txn[] 
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
 
-/* ── Local OCR (Tesseract.js — runs 100% in-browser, no network) ── */
-const MONTHS_PT: Record<string, string> = {
-  jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06',
-  jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12',
-};
-
-function ocrResolveDate(line: string, todayStr: string): string | null {
-  const s = line.toLowerCase().trim();
-  const today = new Date(todayStr + 'T12:00:00');
-  if (/\bhoje\b/.test(s)) return todayStr;
-  if (/\bontem\b/.test(s)) {
-    const d = new Date(today); d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
-  }
-  // "23 abr", "23 de abr", "23 de abril."
-  const mAbr = s.match(/\b(\d{1,2})\s+(?:de\s+)?([a-záàâãéêíóôõú]{3,})/);
-  if (mAbr) {
-    const mon = MONTHS_PT[mAbr[2].slice(0, 3)];
-    if (mon) return `${today.getFullYear()}-${mon}-${mAbr[1].padStart(2, '0')}`;
-  }
-  // DD/MM/YYYY or DD/MM/YY
-  const mDmy = s.match(/\b(\d{2})\/(\d{2})\/(\d{2,4})\b/);
-  if (mDmy) {
-    const yr = mDmy[3].length === 2 ? `20${mDmy[3]}` : mDmy[3];
-    return `${yr}-${mDmy[2]}-${mDmy[1]}`;
-  }
-  return null;
-}
-
-function ocrDetectAccount(text: string): string {
-  const lo = text.toLowerCase();
-  if (/nubank/.test(lo)) return 'Nubank';
-  if (/c6/.test(lo)) {
-    const m = text.match(/(?:final|•{2,}|\*{2,})\s*(\d{4})/i);
-    return m ? `C6 Bank •${m[1]}` : 'C6 Bank';
-  }
-  return 'Importado';
-}
-
-const OCR_SKIP = /fatura de|fatura aberta|limite|saldo|disponível|total da fatura|ver fatura|cartão virtual|crédito disponível|transações|extrato|cartões/i;
-// R$, or OCR misread as RS
-const OCR_AMT_RE = /[-−]?\s*R[S$]\$?\s*([\d.]+,\d{2})/i;
-
-function parseOcrText(text: string, today: string, account: string): Txn[] {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const txns: Txn[] = [];
-  const seen = new Set<string>(); // deduplicate by (merch|amt|d)
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const amtMatch = line.match(OCR_AMT_RE);
-    if (!amtMatch) continue;
-
-    const ctx = lines.slice(Math.max(0, i - 2), i + 3).join(' ');
-    if (OCR_SKIP.test(ctx)) continue;
-
-    const amtRaw = parseFloat(amtMatch[1].replace(/\./g, '').replace(',', '.'));
-    if (isNaN(amtRaw) || amtRaw === 0) continue;
-
-    const isRefund = /estorno|devolução|reembolso/i.test(ctx);
-    const amt = isRefund ? amtRaw : -amtRaw;
-
-    // Merchant: scan backwards, skip date / amount / skip lines
-    let merchant = '';
-    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
-      const l = lines[j];
-      if (OCR_AMT_RE.test(l)) break;
-      if (ocrResolveDate(l, today)) continue;
-      if (OCR_SKIP.test(l)) continue;
-      if (l.length >= 3 && !/^\d+$/.test(l)) { merchant = l; break; }
-    }
-    if (!merchant) continue;
-
-    // Date: forward first, then backward
-    let d = today;
-    const probe = [i + 1, i + 2, i - 1, i - 2, i + 3];
-    for (const j of probe) {
-      if (j < 0 || j >= lines.length) continue;
-      const r = ocrResolveDate(lines[j], today);
-      if (r) { d = r; break; }
-    }
-
-    // Clean OCR noise in merchant name
-    const cleanMerch = merchant.replace(/[|]{2,}/g, '').replace(/\s+/g, ' ').trim();
-    if (cleanMerch.length < 2) continue;
-
-    const key = `${cleanMerch}|${amt}|${d}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    const { merch, installment } = extractInstallment(cleanMerch);
-    const { cat, sub } = catFor(cleanMerch, amt);
-    txns.push({ id: newId(), d, merch, cat, sub, acct: account, amt, installment, kind: 'card' });
-  }
-
-  return txns.sort((a, b) => b.d.localeCompare(a.d));
-}
-
-async function runLocalOcr(
-  imageDataUrl: string,
-  today: string,
-  onProgress: (msg: string) => void,
-): Promise<{ txns: Txn[]; rawText: string }> {
-  onProgress('⟳ Carregando Tesseract…');
-  // Dynamic import avoids SSR issues
-  const { createWorker } = await import('tesseract.js');
-  const worker = await createWorker(['por', 'eng'], 1, {
-    logger: (m: { status: string; progress: number }) => {
-      if (m.status === 'recognizing text') {
-        onProgress(`⟳ Lendo imagem… ${Math.round(m.progress * 100)}%`);
-      }
-    },
-  });
-  try {
-    const { data } = await worker.recognize(imageDataUrl);
-    const account = ocrDetectAccount(data.text);
-    const txns = parseOcrText(data.text, today, account);
-    return { txns, rawText: data.text };
-  } finally {
-    await worker.terminate();
-  }
-}
-
 /* ── Route file to parser ────────────────────────────────────────── */
 function parseFile(content: string, filename: string, acct?: string): { txns: Txn[]; fmt: CsvFormat; rawHeader: string } {
   const { fmt, sep, headerIdx } = detectFormat(content, filename);
@@ -1135,30 +1012,35 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
       let pauseForFmtWarning = false;
       try {
         if (pipeStep === 1) {
-          // ── Image / screenshot mode (local Tesseract, no cloud) ─────
+          // ── Image / screenshot mode (Tesseract via local API route) ──
           if (isImageMode && imageData) {
             newLogs = pt
-              ? [`✓ Imagem detectada: ${fileName}`, `⟳ Processando localmente…`]
-              : [`✓ Image detected: ${fileName}`, `⟳ Processing locally…`];
+              ? [`✓ Imagem detectada: ${fileName}`, `⟳ Processando OCR local…`]
+              : [`✓ Image detected: ${fileName}`, `⟳ Running local OCR…`];
             setLogs(prev => [...prev, ...newLogs]);
             newLogs = [];
             try {
-              // Build a data URL from the base64 so Tesseract can load it
-              const dataUrl = `data:${imageData.mediaType};base64,${imageData.base64}`;
-              const { txns: result, rawText } = await runLocalOcr(
-                dataUrl,
-                new Date().toISOString().slice(0, 10),
-                (msg) => setLogs(prev => { const next = [...prev]; next[next.length - 1] = msg; return next; }),
-              );
+              const res = await fetch('/api/ocr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: imageData.base64, mediaType: imageData.mediaType, today: new Date().toISOString().slice(0, 10) }),
+              });
+              const data = await res.json();
+              if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
+              const raw: { date: string; merchant: string; amount: number; account?: string; installment?: string | null }[] = data.txns;
+              const result: Txn[] = raw.map(r => {
+                const { cat, sub } = catFor(r.merchant, r.amount);
+                return { id: newId(), d: r.date, merch: r.merchant, cat, sub, acct: r.account || acctName || 'Screenshot', amt: r.amount, installment: r.installment ?? null, kind: 'card' as const };
+              }).filter(tx => tx.d && tx.amt !== 0);
               setParsedTxns(result);
               if (result.length === 0) {
                 newLogs = pt
-                  ? [`✗ Nenhuma transação encontrada`, `  Texto extraído: ${rawText.slice(0, 120).replace(/\n/g, ' ')}…`]
-                  : [`✗ No transactions found`, `  Extracted text: ${rawText.slice(0, 120).replace(/\n/g, ' ')}…`];
+                  ? [`✗ Nenhuma transação encontrada`, data.rawText ? `  Texto lido: ${String(data.rawText).slice(0, 100).replace(/\n/g, ' ')}…` : '']
+                  : [`✗ No transactions found`, data.rawText ? `  Text read: ${String(data.rawText).slice(0, 100).replace(/\n/g, ' ')}…` : ''];
               } else {
                 newLogs = pt
-                  ? [`✓ ${result.length} transações extraídas localmente (sem IA, sem nuvem)`]
-                  : [`✓ ${result.length} transactions extracted locally (no AI, no cloud)`];
+                  ? [`✓ ${result.length} transações extraídas (OCR local, sem IA, sem nuvem)`]
+                  : [`✓ ${result.length} transactions extracted (local OCR, no AI, no cloud)`];
               }
             } catch (ocrErr: any) {
               newLogs = pt
@@ -1167,7 +1049,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
               earlyExit = true;
             }
             setLogs(prev => [...prev, ...newLogs]);
-            setPipeStep(4); // always jump to review/confirm after OCR
+            setPipeStep(4);
             return;
           }
 
