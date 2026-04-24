@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Icon } from "./icons";
-import { I18N, Lang, Txn, SUBCATS, LEARNED_RULES, RECURRING, INSTALLMENTS, fmtMoney } from "../lib/data";
+import { I18N, Lang, Txn, SUBCATS, fmtMoney } from "../lib/data";
 
 /* ─── Vault & Storage Page ─────────────────────────────────────────── */
 
@@ -583,9 +583,7 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
   }, [txn?.d, txn?.merch]);
 
   const subcatOptions = cat && SUBCATS[cat] ? SUBCATS[cat] : [];
-  const suggestions = LEARNED_RULES.filter(
-    (r) => txn && txn.merch && txn.merch.toLowerCase().includes(r.pattern.replace("*", "").toLowerCase())
-  ).slice(0, 3);
+  const suggestions: { cat: string; sub?: string }[] = [];
 
   const cats = Object.keys(SUBCATS);
 
@@ -819,69 +817,19 @@ export function RecurringPage({ lang, hasData = false }: RecurringPageProps) {
           {lang === "pt" ? "Parcelamentos" : "Installments"}
         </button>
       </div>
-      {hasData ? (
-        tab === "recurring" ? (
-          <div className="card">
-            <table className="t">
-              <thead><tr>
-                <th>{lang === "pt" ? "Nome" : "Name"}</th>
-                <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-                <th>{lang === "pt" ? "Conta" : "Account"}</th>
-                <th className="r">{lang === "pt" ? "Próximo" : "Next"}</th>
-                <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
-              </tr></thead>
-              <tbody>
-                {RECURRING.map((r, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 500 }}>{r.name}</td>
-                    <td className="muted" style={{ fontSize: 11.5 }}>{I18N[lang].categories[r.cat]}</td>
-                    <td className="muted" style={{ fontSize: 11.5 }}>{r.acct}</td>
-                    <td className="r num muted" style={{ fontSize: 11.5 }}>{r.next}</td>
-                    <td className={"r num " + (r.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
-                      {r.amt > 0 ? "+" : ""}{fmtMoney(r.amt, lang)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="card">
-            <table className="t">
-              <thead><tr>
-                <th>{lang === "pt" ? "Nome" : "Name"}</th>
-                <th>{lang === "pt" ? "Conta" : "Account"}</th>
-                <th className="r">{lang === "pt" ? "Parcelas" : "Installments"}</th>
-                <th className="r">{lang === "pt" ? "Valor/mês" : "Monthly"}</th>
-              </tr></thead>
-              <tbody>
-                {INSTALLMENTS.map((ins, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 500 }}>{ins.name}</td>
-                    <td className="muted" style={{ fontSize: 11.5 }}>{ins.acct}</td>
-                    <td className="r num muted">{ins.current}/{ins.total}</td>
-                    <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(ins.amt, lang)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
-          <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
-          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
-            {tab === "recurring"
-              ? (lang === "pt" ? "Nenhum recorrente cadastrado" : "No recurring items yet")
-              : (lang === "pt" ? "Nenhum parcelamento ativo" : "No installments yet")}
-          </div>
-          <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
-            {tab === "recurring"
-              ? (lang === "pt" ? "Recorrentes são detectados automaticamente ao importar transações." : "Recurring items are detected automatically when you import transactions.")
-              : (lang === "pt" ? "Parcelamentos são detectados ao importar faturas de cartão." : "Installments are detected when you import credit card bills.")}
-          </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
+        <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
+        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
+          {tab === "recurring"
+            ? (lang === "pt" ? "Nenhum recorrente cadastrado" : "No recurring items yet")
+            : (lang === "pt" ? "Nenhum parcelamento ativo" : "No installments yet")}
         </div>
-      )}
+        <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
+          {tab === "recurring"
+            ? (lang === "pt" ? "Recorrentes são detectados automaticamente ao importar transações." : "Recurring items are detected automatically when you import transactions.")
+            : (lang === "pt" ? "Parcelamentos são detectados ao importar faturas de cartão." : "Installments are detected when you import credit card bills.")}
+        </div>
+      </div>
     </div>
   );
 }

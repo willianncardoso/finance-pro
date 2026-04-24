@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Icon } from "./icons";
 import { I18N, Lang, Insight } from "../lib/data";
 
@@ -92,6 +93,19 @@ interface TopbarProps {
 }
 export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn }: TopbarProps) {
   const t = I18N[lang];
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const h = () => {
+      setSavedFlash(true);
+      clearTimeout(timer);
+      timer = setTimeout(() => setSavedFlash(false), 2200);
+    };
+    window.addEventListener("fp:autosave", h);
+    return () => { window.removeEventListener("fp:autosave", h); clearTimeout(timer); };
+  }, []);
+
   return (
     <header className="topbar">
       <div className="search" style={{ cursor: "pointer" }} onClick={() => (window as any).__modal?.("cmdpalette", {})}>
@@ -100,6 +114,17 @@ export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn 
         <span className="kbd">⌘K</span>
       </div>
       <div className="topbar-actions">
+        {savedFlash && (
+          <span style={{
+            fontSize: 11, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 4,
+            opacity: savedFlash ? 1 : 0, transition: "opacity 0.4s",
+          }}>
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13 4L6 11l-3-3" />
+            </svg>
+            {lang === "pt" ? "Salvo" : "Saved"}
+          </span>
+        )}
         <div className="seg" style={{ marginRight: 6 }}>
           <button className={lang === "pt" ? "on" : ""} onClick={() => setLang("pt")}>PT</button>
           <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>EN</button>

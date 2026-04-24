@@ -121,7 +121,10 @@ export default function Home() {
     setRoute(loadRoute());
     try {
       const stored = localStorage.getItem("fp_txns");
-      if (stored) setTxns(JSON.parse(stored));
+      if (stored) {
+        const parsed: Txn[] = JSON.parse(stored);
+        setTxns(parsed.map(t => t.id ? t : { ...t, id: newId() }));
+      }
     } catch {}
     setHydrated(true);
   }, []);
@@ -129,6 +132,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated) return;
     localStorage.setItem("fp_txns", JSON.stringify(txns));
+    window.dispatchEvent(new CustomEvent("fp:autosave"));
   }, [txns, hydrated]);
 
   useEffect(() => {
