@@ -702,62 +702,74 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_import}</h1>
-          <div className="page-sub">{lang === "pt" ? "PDF · XML · OFX · CSV · imagens · tudo processado localmente" : "PDF · XML · OFX · CSV · images · all processed locally"}</div>
+          <div className="page-sub">{pt ? 'OFX · CSV C6 · CSV Nubank · CSV genérico · tudo processado localmente' : 'OFX · C6 CSV · Nubank CSV · Generic CSV · all processed locally'}</div>
         </div>
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "1.5fr 1fr", gap: 14, marginBottom: 14 }}>
+      <div className="grid" style={{ gridTemplateColumns: '1.5fr 1fr', gap: 14, marginBottom: 14 }}>
         <div>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.ofx,.qfx,.xml,.csv,.png,.jpg,.jpeg"
-            style={{ display: "none" }}
-            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }}
+            accept=".ofx,.qfx,.csv,.txt"
+            style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }}
           />
 
           {isDone ? (
-            <div className="dz" style={{ background: "var(--accent-bg)", borderColor: "var(--accent-fg)", cursor: "default" }}>
-              <Icon name="check" style={{ width: 38, height: 38, stroke: "var(--accent-fg)", strokeWidth: 1.5 }} className="" />
-              <div style={{ fontSize: 16, fontWeight: 600, margin: "10px 0 4px", color: "var(--accent-fg)" }}>
-                {lang === "pt" ? "Importação concluída!" : "Import complete!"}
+            <div className="dz" style={{ background: 'var(--accent-bg)', borderColor: 'var(--accent-fg)', cursor: 'default' }}>
+              <Icon name="check" style={{ width: 38, height: 38, stroke: 'var(--accent-fg)', strokeWidth: 1.5 }} className="" />
+              <div style={{ fontSize: 16, fontWeight: 600, margin: '10px 0 4px', color: 'var(--accent-fg)' }}>
+                {pt ? 'Importação concluída!' : 'Import complete!'}
               </div>
-              <div style={{ fontSize: 12, color: "var(--ink-2)" }}>{parsedTxns.length} {lang === "pt" ? "transações importadas com sucesso" : "transactions imported successfully"}</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>{parsedTxns.length} {pt ? 'transações mescladas com sucesso' : 'transactions merged successfully'}</div>
               <button className="btn sm" style={{ marginTop: 14 }} onClick={handleReset}>
-                {lang === "pt" ? "Importar outro arquivo" : "Import another file"}
+                {pt ? 'Importar outro arquivo' : 'Import another file'}
               </button>
             </div>
           ) : (
             <div
-              className={"dz" + (drag ? " drag" : "") + (isProcessing ? " drag" : "")}
-              style={isProcessing ? { pointerEvents: "none", opacity: 0.5 } : {}}
+              className={'dz' + (drag ? ' drag' : '') + (isProcessing ? ' drag' : '')}
+              style={isProcessing ? { pointerEvents: 'none', opacity: 0.5 } : {}}
               onDragOver={e => { e.preventDefault(); setDrag(true); }}
               onDragLeave={() => setDrag(false)}
               onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
               onClick={() => !isProcessing && fileInputRef.current?.click()}
             >
-              <Icon name="upload" style={{ width: 38, height: 38, stroke: "var(--ink-3)", strokeWidth: 1.3 }} className="" />
-              <div style={{ fontSize: 16, fontWeight: 600, margin: "10px 0 4px" }}>
-                {lang === "pt" ? "Arraste arquivos ou clique para selecionar" : "Drag files or click to select"}
+              <Icon name="upload" style={{ width: 38, height: 38, stroke: 'var(--ink-3)', strokeWidth: 1.3 }} className="" />
+              <div style={{ fontSize: 16, fontWeight: 600, margin: '10px 0 4px' }}>
+                {pt ? 'Arraste o arquivo ou clique para selecionar' : 'Drag file or click to select'}
               </div>
-              <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                {lang === "pt" ? "Faturas, extratos, notas de negociação, comprovantes de Pix" : "Bills, statements, brokerage notes, Pix receipts"}
+              <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                {pt ? 'Fatura CSV do C6, Nubank, ou arquivo OFX do seu banco' : 'C6 or Nubank CSV statement, or OFX from your bank'}
               </div>
-              <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 14, flexWrap: "wrap" }}>
-                {["PDF", "OFX", "XML", "CSV", "PNG/JPG"].map((f, i) => <span key={i} className="pill">{f}</span>)}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 14, flexWrap: 'wrap' }}>
+                {['CSV (C6)', 'CSV (Nubank)', 'OFX/QFX', 'CSV genérico'].map((f, i) => <span key={i} className="pill">{f}</span>)}
               </div>
+            </div>
+          )}
+
+          {/* Account name override (shown before processing) */}
+          {!isProcessing && !isDone && (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ fontSize: 12, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{pt ? 'Nome da conta (opcional):' : 'Account name (optional):'}</label>
+              <input
+                value={acctName}
+                onChange={e => setAcctName(e.target.value)}
+                placeholder={pt ? 'Ex: Nubank, C6 Crédito…' : 'e.g. Nubank, C6 Credit…'}
+                className="field"
+                style={{ flex: 1, height: 32, fontSize: 12 }}
+              />
             </div>
           )}
 
           {isProcessing && (
             <div className="card" style={{ marginTop: 14 }}>
               <div className="card-head">
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {pipeStep < 5 && <div className="step-spinner" />}
-                  <h3 className="card-title" style={{ textTransform: "uppercase", letterSpacing: "0.04em", fontSize: 11 }}>
-                    {pipeStep < 5
-                      ? (lang === "pt" ? `Processando · ${fileName}` : `Processing · ${fileName}`)
-                      : (lang === "pt" ? `Importando · ${fileName}` : `Importing · ${fileName}`)}
+                  <h3 className="card-title" style={{ textTransform: 'uppercase', letterSpacing: '0.04em', fontSize: 11 }}>
+                    {pipeStep < 5 ? (pt ? `Processando · ${fileName}` : `Processing · ${fileName}`) : (pt ? `Importando · ${fileName}` : `Importing · ${fileName}`)}
                   </h3>
                 </div>
                 <button className="btn ghost sm" onClick={handleReset}>
@@ -766,22 +778,16 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
               </div>
               <div className="card-pad">
                 {/* Step bars */}
-                <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
                   {steps.map((s, i) => {
                     const stepNum = i + 1;
                     const done = pipeStep > stepNum;
                     const active = pipeStep === stepNum;
                     return (
                       <div key={i} style={{ flex: 1 }}>
-                        <div style={{
-                          height: 4,
-                          borderRadius: 2,
-                          background: done || active ? "var(--accent)" : "var(--bg-3)",
-                          marginBottom: 5,
-                          animation: active ? "pipe-pulse 1s ease-in-out infinite" : "none",
-                        }} />
-                        <div style={{ fontSize: 10, fontWeight: done || active ? 600 : 400, color: done ? "var(--accent-fg)" : active ? "var(--ink)" : "var(--ink-3)", display: "flex", alignItems: "center", gap: 2 }}>
-                          {done && <Icon name="check" style={{ width: 9, height: 9, stroke: "var(--accent-fg)" }} className="" />}
+                        <div style={{ height: 4, borderRadius: 2, background: done || active ? 'var(--accent)' : 'var(--bg-3)', marginBottom: 5, animation: active ? 'pipe-pulse 1s ease-in-out infinite' : 'none' }} />
+                        <div style={{ fontSize: 10, fontWeight: done || active ? 600 : 400, color: done ? 'var(--accent-fg)' : active ? 'var(--ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 2 }}>
+                          {done && <Icon name="check" style={{ width: 9, height: 9, stroke: 'var(--accent-fg)' }} className="" />}
                           {s}
                         </div>
                       </div>
@@ -790,30 +796,74 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
                 </div>
 
                 {/* Log output */}
-                <div style={{ padding: "12px 14px", background: "var(--bg-2)", borderRadius: 8, marginBottom: 14, fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
+                <div style={{ padding: '12px 14px', background: 'var(--bg-2)', borderRadius: 8, marginBottom: awaitingConfirm ? 12 : 14, fontFamily: 'var(--font-mono)', fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
                   {logs.map((l, i) => (
-                    <div key={i} style={{ color: l.startsWith("○") ? "var(--ink-3)" : "var(--ink)" }}>{l}</div>
+                    <div key={i} style={{ color: l.startsWith('○') ? 'var(--ink-3)' : 'var(--ink)' }}>{l}</div>
                   ))}
-                  {pipeStep < 4 && <span className="pipe-cursor" style={{ color: "var(--ink-3)" }}>▌</span>}
+                  {pipeStep < 4 && <span className="pipe-cursor" style={{ color: 'var(--ink-3)' }}>▌</span>}
                   {awaitingConfirm && (
-                    <div style={{ marginTop: 8, color: "var(--accent-fg)", fontWeight: 600 }}>
-                      {lang === "pt" ? "→ Pronto para importar. Revise e confirme." : "→ Ready to import. Review and confirm."}
+                    <div style={{ marginTop: 8, color: 'var(--accent-fg)', fontWeight: 600 }}>
+                      {pt ? '→ Pronto. Revise as transações abaixo e confirme.' : '→ Ready. Review transactions below and confirm.'}
                     </div>
                   )}
                 </div>
 
+                {/* Transaction preview */}
+                {awaitingConfirm && parsedTxns.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-2)' }}>
+                        {pt ? `Prévia · ${parsedTxns.length} transações` : `Preview · ${parsedTxns.length} transactions`}
+                      </span>
+                      <button className="btn ghost sm" style={{ fontSize: 10 }} onClick={() => setShowPreview(v => !v)}>
+                        {showPreview ? (pt ? 'Ocultar' : 'Hide') : (pt ? 'Ver todas' : 'Show all')}
+                      </button>
+                    </div>
+                    <div style={{ maxHeight: showPreview ? 320 : 160, overflowY: 'auto', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-2)' }}>
+                      <table className="t" style={{ margin: 0 }}>
+                        <thead><tr>
+                          <th style={{ fontSize: 10 }}>{pt ? 'Data' : 'Date'}</th>
+                          <th style={{ fontSize: 10 }}>{pt ? 'Estabelecimento' : 'Merchant'}</th>
+                          <th style={{ fontSize: 10 }}>{pt ? 'Categoria' : 'Category'}</th>
+                          <th className="r" style={{ fontSize: 10 }}>{pt ? 'Valor' : 'Amount'}</th>
+                        </tr></thead>
+                        <tbody>
+                          {parsedTxns.slice(0, showPreview ? 200 : 5).map((tx, i) => (
+                            <tr key={i}>
+                              <td className="muted" style={{ fontSize: 10.5 }}>{tx.d}</td>
+                              <td style={{ fontSize: 10.5, fontWeight: 500, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.merch}</td>
+                              <td>
+                                <span className="pill" style={{ fontSize: 9.5 }}>
+                                  <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
+                                  {I18N[lang].categories[tx.cat] ?? tx.cat}
+                                </span>
+                              </td>
+                              <td className={"r num " + (tx.amt > 0 ? 'pos' : '')} style={{ fontSize: 10.5, fontWeight: 600 }}>
+                                {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
                 {/* Actions */}
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                  <button className="btn sm" onClick={handleReset}>
-                    {lang === "pt" ? "Cancelar" : "Cancel"}
-                  </button>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+                  <button className="btn sm" onClick={handleReset}>{pt ? 'Cancelar' : 'Cancel'}</button>
+                  {awaitingConfirm && (
+                    <button className="btn ghost sm" onClick={() => handleConfirm('replace')} style={{ color: 'var(--ink-3)' }}>
+                      {pt ? 'Substituir tudo' : 'Replace all'}
+                    </button>
+                  )}
                   <button
                     className="btn primary sm"
                     disabled={!awaitingConfirm}
-                    onClick={handleConfirm}
-                    style={{ opacity: awaitingConfirm ? 1 : 0.4, cursor: awaitingConfirm ? "pointer" : "not-allowed" }}
+                    onClick={() => handleConfirm('merge')}
+                    style={{ opacity: awaitingConfirm ? 1 : 0.4, cursor: awaitingConfirm ? 'pointer' : 'not-allowed' }}
                   >
-                    {lang === "pt" ? "Confirmar importação" : "Confirm import"}
+                    {pt ? 'Mesclar e importar' : 'Merge & import'}
                   </button>
                 </div>
               </div>
@@ -823,35 +873,35 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
 
         <div>
           <div className="card card-pad" style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-              <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--accent-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                <Icon name="lock" style={{ width: 17, height: 17, stroke: "var(--accent-fg)" }} className="" />
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--accent-bg)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                <Icon name="lock" style={{ width: 17, height: 17, stroke: 'var(--accent-fg)' }} className="" />
               </div>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{lang === "pt" ? "Tudo processado localmente" : "Everything processed locally"}</div>
-                <div style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 4, lineHeight: 1.55 }}>
-                  {lang === "pt" ? "Seus documentos são analisados na sua máquina. Nada é enviado para servidores externos." : "Your documents are analyzed on your machine. Nothing sent to external servers."}
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{pt ? 'Tudo processado localmente' : 'Everything processed locally'}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 4, lineHeight: 1.55 }}>
+                  {pt ? 'Seus arquivos são analisados no seu navegador. Nada é enviado para servidores.' : 'Files are analyzed in your browser. Nothing is sent to external servers.'}
                 </div>
               </div>
             </div>
           </div>
           <div className="card">
-            <div className="card-head"><h3 className="card-title">{lang === "pt" ? "Formatos suportados" : "Supported formats"}</h3></div>
+            <div className="card-head"><h3 className="card-title">{pt ? 'Formatos suportados' : 'Supported formats'}</h3></div>
             <div>
               {[
-                { t: "PDF", ext: ".pdf", desc: lang === "pt" ? "Faturas, extratos, notas de negociação" : "Bills, statements, brokerage notes" },
-                { t: "OFX / QFX", ext: ".ofx", desc: lang === "pt" ? "Padrão bancário internacional" : "Open Financial Exchange format" },
-                { t: "XML", ext: ".xml", desc: lang === "pt" ? "BTG, XP, Clear e outros" : "BTG, XP, Clear brokerages" },
-                { t: "CSV / Excel", ext: ".csv", desc: lang === "pt" ? "Exports genéricos" : "Generic exports" },
-                { t: lang === "pt" ? "Imagens (OCR)" : "Images (OCR)", ext: ".png/.jpg", desc: lang === "pt" ? "Screenshots de Pix, comprovantes" : "Pix screenshots, receipts" },
+                { t: 'CSV — C6 Bank', ext: '.csv', desc: pt ? 'Exportado do app C6' : 'Exported from C6 app', ok: true },
+                { t: 'CSV — Nubank', ext: '.csv', desc: pt ? 'Exportado do app Nubank' : 'Exported from Nubank app', ok: true },
+                { t: 'OFX / QFX', ext: '.ofx', desc: pt ? 'Padrão bancário internacional (Inter, Bradesco…)' : 'Open Financial Exchange (Inter, Bradesco…)', ok: true },
+                { t: 'CSV genérico', ext: '.csv', desc: pt ? 'Qualquer CSV com data e valor' : 'Any CSV with date and amount', ok: true },
+                { t: pt ? 'PDF / Imagem' : 'PDF / Image', ext: '.pdf', desc: pt ? 'Em desenvolvimento' : 'Coming soon', ok: false },
               ].map((f, i) => (
-                <div key={i} style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: 10, borderBottom: i < 4 ? "1px solid var(--border)" : "none" }}>
-                  <Icon name="file" style={{ width: 15, height: 15, stroke: "var(--ink-2)" }} className="" />
+                <div key={i} style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: i < 4 ? '1px solid var(--border)' : 'none', opacity: f.ok ? 1 : 0.45 }}>
+                  <Icon name="file" style={{ width: 15, height: 15, stroke: f.ok ? 'var(--accent-fg)' : 'var(--ink-3)' }} className="" />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 12, fontWeight: 500 }}>{f.t}</div>
-                    <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{f.desc}</div>
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{f.desc}</div>
                   </div>
-                  <span className="chip-sm">{f.ext}</span>
+                  <span className={'chip-sm' + (f.ok ? '' : ' muted')}>{f.ext}</span>
                 </div>
               ))}
             </div>
@@ -861,24 +911,24 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
 
       <div className="card">
         <div className="card-head">
-          <h3 className="card-title">{lang === "pt" ? "Histórico de importações" : "Import history"}</h3>
+          <h3 className="card-title">{pt ? 'Histórico de importações' : 'Import history'}</h3>
         </div>
         {history.length === 0 ? (
           <EmptyState
             icon="file"
-            title={lang === "pt" ? "Nenhuma importação ainda" : "No imports yet"}
-            sub={lang === "pt" ? "O histórico das suas importações aparecerá aqui." : "Your import history will appear here."}
+            title={pt ? 'Nenhuma importação ainda' : 'No imports yet'}
+            sub={pt ? 'O histórico das suas importações aparecerá aqui.' : 'Your import history will appear here.'}
           />
         ) : (
           <div>
             {history.map((h, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", borderBottom: i < history.length - 1 ? "1px solid var(--border)" : "none" }}>
-                <Icon name="file" style={{ width: 15, height: 15, stroke: "var(--accent-fg)" }} className="" />
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <Icon name="file" style={{ width: 15, height: 15, stroke: 'var(--accent-fg)' }} className="" />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 12, fontWeight: 500 }}>{h.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{h.when}</div>
+                  <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{h.when}{h.fmt ? ` · ${h.fmt}` : ''}</div>
                 </div>
-                <span className="pill">{h.count} {lang === "pt" ? "transações" : "transactions"}</span>
+                <span className="pill">{h.count} {pt ? 'transações' : 'transactions'}</span>
               </div>
             ))}
           </div>

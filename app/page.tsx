@@ -258,15 +258,23 @@ export default function Home() {
     setToast({ message: state.lang === "pt" ? "Transação salva" : "Transaction saved", kind: "success" });
   }
 
-  function handleImportComplete(newTxns: Txn[]) {
-    setTxns(newTxns);
+  function handleImportComplete(newTxns: Txn[], mode: "merge" | "replace" = "merge") {
+    if (mode === "replace") {
+      setTxns(newTxns);
+    } else {
+      setTxns(prev => {
+        const existingKeys = new Set(prev.map(t => `${t.d}|${t.merch}|${t.amt}`));
+        const fresh = newTxns.filter(t => !existingKeys.has(`${t.d}|${t.merch}|${t.amt}`));
+        return [...fresh, ...prev].sort((a, b) => b.d.localeCompare(a.d));
+      });
+    }
     setToast({
       message: state.lang === "pt"
         ? `${newTxns.length} transações importadas com sucesso`
         : `${newTxns.length} transactions imported successfully`,
       kind: "success",
     });
-    navigate("accounts");
+    navigate("cards");
   }
 
   function navigate(r: string) {
@@ -298,7 +306,7 @@ export default function Home() {
         )}
         {route === "cards" && <CardsPage lang={state.lang} txns={txns} />}
         {route === "invest" && <InvestPage lang={state.lang} txns={txns} />}
-        {route === "import" && <ImportPage lang={state.lang} onImportComplete={handleImportComplete} />}
+        {route === "import" && <ImportPage lang={state.lang} onImportComplete={(txns, mode) => handleImportComplete(txns, mode)} />}
         {route === "insights" && <InsightsPage lang={state.lang} txns={txns} />}
         {route === "reports" && <ReportsPage lang={state.lang} txns={txns} />}
         {route === "budget" && <BudgetPage lang={state.lang} txns={txns} />}
