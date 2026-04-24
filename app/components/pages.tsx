@@ -521,6 +521,12 @@ function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolea
               {pt ? 'excluído' : 'excluded'}
             </span>
           )}
+          {tx.source === 'paste' && (
+            <span style={{ fontSize: 10, fontWeight: 600, border: '1px solid #7c3aed40', borderRadius: 4, padding: '1px 5px',
+              background: '#7c3aed0d', color: '#7c3aed', letterSpacing: '0.02em' }}>
+              {pt ? 'colado' : 'pasted'}
+            </span>
+          )}
           {reimbPending && (
             <button
               onClick={handleQuickReceive}
@@ -1487,27 +1493,54 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAcct
             </div>
           ) : isPasteMode && !isProcessing ? (
             <div>
-              {/* Card selector */}
+              {/* Card / account selector */}
               <div style={{ marginBottom: 10 }}>
-                <label style={{ fontSize: 12, color: 'var(--ink-3)', display: 'block', marginBottom: 4 }}>
-                  {pt ? 'Cartão / conta (selecione ou digite):' : 'Card / account (select or type):'}
+                <label style={{ fontSize: 12, color: 'var(--ink-3)', display: 'block', marginBottom: 4, fontWeight: 500 }}>
+                  {pt ? 'Cartão / conta' : 'Card / account'}
+                  <span style={{ color: 'var(--danger, #ef4444)', marginLeft: 2 }}>*</span>
                 </label>
-                <input
-                  list="paste-accts-list"
-                  value={acctName}
-                  onChange={e => setAcctName(e.target.value)}
-                  placeholder={pt ? 'Ex: C6 Bank •4321' : 'e.g. C6 Bank •4321'}
-                  className="field"
-                  style={{ width: '100%', fontSize: 13, boxSizing: 'border-box' }}
-                />
-                <datalist id="paste-accts-list">
-                  {existingAccts.map(a => <option key={a} value={a} />)}
-                </datalist>
-                {existingAccts.length > 0 && (
-                  <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 3 }}>
-                    {pt ? 'Selecione o cartão existente para que a fatura CSV posterior possa substituir corretamente estas transações.' : 'Select the existing card so the later CSV invoice can correctly supersede these transactions.'}
-                  </div>
+                {existingAccts.length > 0 ? (
+                  <>
+                    <select
+                      value={existingAccts.includes(acctName) ? acctName : acctName ? '__custom__' : ''}
+                      onChange={e => {
+                        if (e.target.value === '__custom__') setAcctName('');
+                        else setAcctName(e.target.value);
+                      }}
+                      className="field"
+                      style={{ width: '100%', fontSize: 13, marginBottom: 6 }}
+                    >
+                      <option value="" disabled>{pt ? '— Selecione um cartão —' : '— Select a card —'}</option>
+                      {existingAccts.map(a => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                      <option value="__custom__">{pt ? '✏ Outro (digitar)…' : '✏ Other (type)…'}</option>
+                    </select>
+                    {(!existingAccts.includes(acctName) || acctName === '') && (
+                      <input
+                        autoFocus={!existingAccts.includes(acctName) && acctName !== ''}
+                        value={acctName}
+                        onChange={e => setAcctName(e.target.value)}
+                        placeholder={pt ? 'Nome do cartão / conta' : 'Card / account name'}
+                        className="field"
+                        style={{ width: '100%', fontSize: 13, boxSizing: 'border-box' }}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <input
+                    value={acctName}
+                    onChange={e => setAcctName(e.target.value)}
+                    placeholder={pt ? 'Ex: C6 Bank •4321' : 'e.g. C6 Bank •4321'}
+                    className="field"
+                    style={{ width: '100%', fontSize: 13, boxSizing: 'border-box' }}
+                  />
                 )}
+                <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 4 }}>
+                  {pt
+                    ? 'Selecionar um cartão já existente permite que a fatura CSV oficial, quando importada depois, substitua automaticamente as transações não editadas.'
+                    : 'Selecting an existing card lets the official CSV invoice, imported later, automatically replace unedited transactions.'}
+                </div>
               </div>
               <textarea
                 value={pasteText}

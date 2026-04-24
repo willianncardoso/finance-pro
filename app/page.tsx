@@ -325,9 +325,41 @@ export default function Home() {
       setTxns(newTxns);
     } else {
       setTxns(prev => {
-        const existingKeys = new Set(prev.map(t => `${t.d}|${t.merch}|${t.amt}`));
-        const fresh = newTxns.filter(t => !existingKeys.has(`${t.d}|${t.merch}|${t.amt}`));
-        return [...fresh, ...prev].sort((a, b) => b.d.localeCompare(a.d));
+        // Accounts covered by the incoming import
+        const newAccts = new Set(newTxns.map(t => t.acct));
+        // Index incoming txns by acct+date+amount for paste-match lookup
+        const csvByKey = new Map(newTxns.map(t => [`${t.acct}|${t.d}|${t.amt.toFixed(2)}`, t]));
+
+        // Pass 1: filter prev, noting which CSV rows were consumed or blocked
+        const consumed = new Set<string>(); // CSV keys replaced by unedited paste txns
+        const blocked  = new Set<string>(); // CSV keys blocked by manually-edited txns
+
+        const filteredPrev: Txn[] = [];
+        for (const t of prev) {
+          const key = `${t.acct}|${t.d}|${t.amt.toFixed(2)}`;
+          if (newAccts.has(t.acct) && csvByKey.has(key)) {
+            if (t.source === "paste") {
+              // Unedited paste → drop it; CSV version will supersede
+              consumed.add(key);
+              continue;
+            } else {
+              // Manually edited → keep it; block the CSV row
+              blocked.add(key);
+            }
+          }
+          filteredPrev.push(t);
+        }
+
+        // Pass 2: add CSV txns that aren't blocked and aren't exact duplicates
+        const existingKeys = new Set(filteredPrev.map(t => `${t.d}|${t.merch}|${t.amt}`));
+        const fresh = newTxns.filter(t => {
+          const key = `${t.acct}|${t.d}|${t.amt.toFixed(2)}`;
+          if (blocked.has(key)) return false;                          // keep manual edit
+          if (!consumed.has(key) && existingKeys.has(`${t.d}|${t.merch}|${t.amt}`)) return false; // exact dup
+          return true;
+        });
+
+        return [...fresh, ...filteredPrev].sort((a, b) => b.d.localeCompare(a.d));
       });
     }
     setToast({
@@ -378,7 +410,7 @@ export default function Home() {
           />
         )}
         {route === "invest" && <InvestPage lang={state.lang} txns={txns} />}
-        {route === "import" && <ImportPage lang={state.lang} onImportComplete={(txns, mode) => handleImportComplete(txns, mode)} onDeleteBatch={handleDeleteBatch} />}
+        {route === "import" && <ImportPage lang={state.lang} onImportComplete={(txns, mode) => handleImportComplete(txns, mode)} onDeleteBatch={handleDeleteBatch} existingAccts={[...new Set(txns.map(t => t.acct))].sort()} />}
         {route === "insights" && <InsightsPage lang={state.lang} txns={txns} />}
         {route === "reports" && <ReportsPage lang={state.lang} txns={txns} />}
         {route === "budget" && <BudgetPage lang={state.lang} txns={txns} />}
