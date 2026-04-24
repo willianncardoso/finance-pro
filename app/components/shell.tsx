@@ -35,8 +35,11 @@ export function Sidebar({ lang, route, setRoute }: SidebarProps) {
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">₣</div>
-        <div>
-          <div className="brand-name">{t.app_name}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div className="brand-name">{t.app_name}</div>
+            <span style={{ fontSize: 9.5, fontFamily: "var(--font-mono)", color: "var(--ink-4)", background: "var(--bg-3)", borderRadius: 4, padding: "1px 5px", letterSpacing: "0.04em", flexShrink: 0 }}>v0.2.0</span>
+          </div>
           <div className="brand-sub">{t.app_tagline}</div>
         </div>
       </div>
