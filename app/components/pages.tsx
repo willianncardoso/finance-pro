@@ -102,14 +102,11 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const effective = cardTxns.length > 0 ? cardTxns : txns.filter(tx => tx.kind !== 'account');
 
   const months = availableMonths(effective);
-  const [selMonth, setSelMonth] = useState(months[0] ?? '');
+  // '' = all months (default); user can filter down to a specific month
+  const [selMonth, setSelMonth] = useState('');
   const [selAcct, setSelAcct] = useState('all');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
-
-  useEffect(() => {
-    if (!selMonth && months.length > 0) setSelMonth(months[0]);
-  }, [months.length]);
 
   if (!effective.length) return (
     <div className="page">
@@ -170,7 +167,7 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           <h1 className="page-title">{t.nav_cards}</h1>
           <div className="page-sub">
             {allAccts.length} {pt ? (allAccts.length === 1 ? 'cartão' : 'cartões') : (allAccts.length === 1 ? 'card' : 'cards')}
-            {selMonth ? ` · ${monthLabel(selMonth, lang)}` : ''}
+            {selMonth ? ` · ${monthLabel(selMonth, lang)}` : ` · ${pt ? 'todos os meses' : 'all months'}`}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -179,17 +176,27 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
             <button
               className="btn ghost sm"
               style={{ borderRadius: 0, borderRight: '1px solid var(--border)', padding: '0 10px', height: 32 }}
-              disabled={months.indexOf(selMonth) >= months.length - 1}
-              onClick={() => { const i = months.indexOf(selMonth); if (i < months.length - 1) setSelMonth(months[i + 1]); }}
+              disabled={!selMonth || months.indexOf(selMonth) >= months.length - 1}
+              onClick={() => {
+                if (!selMonth) { setSelMonth(months[months.length - 1]); return; }
+                const i = months.indexOf(selMonth);
+                if (i < months.length - 1) setSelMonth(months[i + 1]);
+              }}
             >‹</button>
             <select value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{ border: 'none', background: 'transparent', fontSize: 12, fontWeight: 500, padding: '0 8px', height: 32, cursor: 'pointer', color: 'var(--ink)' }}>
+              <option value="">{pt ? 'Todos os meses' : 'All months'}</option>
               {months.map(m => <option key={m} value={m}>{monthLabel(m, lang)}</option>)}
             </select>
             <button
               className="btn ghost sm"
               style={{ borderRadius: 0, borderLeft: '1px solid var(--border)', padding: '0 10px', height: 32 }}
-              disabled={months.indexOf(selMonth) <= 0}
-              onClick={() => { const i = months.indexOf(selMonth); if (i > 0) setSelMonth(months[i - 1]); }}
+              disabled={selMonth === months[0]}
+              onClick={() => {
+                if (!selMonth) { setSelMonth(months[0]); return; }
+                const i = months.indexOf(selMonth);
+                if (i > 0) setSelMonth(months[i - 1]);
+                else setSelMonth('');
+              }}
             >›</button>
           </div>
           <button className="btn primary sm" onClick={() => (window as any).__navigate?.('import')}>
