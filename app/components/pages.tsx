@@ -640,15 +640,20 @@ function parseC6FaturaCSV(content: string, acct = 'C6 Bank', sep = ';', hIdx = -
   const headerCols = splitLine(lines[headerIdx], sep).map(c => norm(c));
   const idxOf = (pred: (c: string) => boolean) => headerCols.findIndex(pred);
 
-  const colDate  = idxOf(c => c.includes('datacompra') || (c.includes('data') && !c.includes('cotacao')));
-  const colDesc  = idxOf(c => c.includes('descricao') || c.startsWith('descri'));
-  const colCat   = idxOf(c => c === 'categoria' || c.startsWith('categ'));
-  const colParc  = idxOf(c => c === 'parcela' || c.startsWith('parc'));
-  // Prefer "Valor (em R$)" → normalized "valoremr"; avoid US$ column
-  const colValor = (() => {
+  const colDate   = idxOf(c => c.includes('datacompra') || (c.includes('data') && !c.includes('cotacao')));
+  const colFinal  = idxOf(c => c.includes('finaldocartao') || c.includes('finalcartao') || c.includes('final'));
+  const colDesc   = idxOf(c => c.includes('descricao') || c.startsWith('descri'));
+  const colCat    = idxOf(c => c === 'categoria' || c.startsWith('categ'));
+  const colParc   = idxOf(c => c === 'parcela' || c.startsWith('parc'));
+  const colValor  = (() => {
     const i = idxOf(c => c.includes('valor') && c.includes('r') && !c.includes('us'));
     return i >= 0 ? i : headerCols.length - 1;
   })();
+
+  // Detect card number from first data row to build a specific acct label
+  const firstData = lines[headerIdx + 1] ? splitLine(lines[headerIdx + 1], sep) : [];
+  const cardLast4 = colFinal >= 0 ? firstData[colFinal]?.trim() : '';
+  const resolvedAcct = cardLast4 ? `${acct} •${cardLast4}` : acct;
 
   const txns: Txn[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
@@ -675,7 +680,7 @@ function parseC6FaturaCSV(content: string, acct = 'C6 Bank', sep = ';', hIdx = -
       ? `${descricao} (${parcela})`
       : descricao;
     const { cat, sub } = catFor(`${descricao} ${categoria}`, amt);
-    txns.push({ id: newId(), d, merch: label || descricao || 'C6', cat, sub, acct, amt });
+    txns.push({ id: newId(), d, merch: label || descricao || 'C6', cat, sub, acct: resolvedAcct, amt });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -866,11 +871,14 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
         count,
         fmt: fmtLabels[detectedFmt],
       };
-      setHistory(prev => {
-        const updated = [entry, ...prev];
-        try { localStorage.setItem('fp_imports', JSON.stringify(updated)); } catch {}
-        return updated;
-      });
+      // Write localStorage DIRECTLY here — not inside a React state updater,
+      // because the component may unmount (route change) before the updater runs.
+      try {
+        const stored = localStorage.getItem('fp_imports');
+        const prev: typeof entry[] = stored ? JSON.parse(stored) : [];
+        localStorage.setItem('fp_imports', JSON.stringify([entry, ...prev]));
+      } catch {}
+      setHistory(prev => [entry, ...prev]);
       setPipeStep(6);
       onImportComplete?.(parsedTxns, mode);
     }, 1000);
@@ -879,8 +887,11 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
   function handleReset() {
     setPipeStep(0);
     setFileName('');
+    setRawContent('');
+    setParsedTxns([]);
     setLogs([]);
     setShowPreview(false);
+    setAcctName('');
   }
 
   const steps = pt ? PIPE_LABELS_PT : PIPE_LABELS_EN;
