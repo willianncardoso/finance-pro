@@ -491,8 +491,23 @@ function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep:
     return { fmt: 'ofx', sep: ',', headerIdx: 0 };
   }
 
-  // Find the actual header row (first non-empty line)
-  const headerLineIdx = lines.findIndex(l => l.trim().length > 0);
+  // Find the actual header row: scan up to 15 lines for one with CSV separators + known keywords
+  const headerLineIdx = (() => {
+    const n = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+    for (let i = 0; i < Math.min(lines.length, 15); i++) {
+      const l = lines[i];
+      if (!l.trim()) continue;
+      if (!(l.includes(',') || l.includes(';'))) continue;
+      const ln = n(l);
+      if (
+        (ln.includes('entrada') && (ln.includes('saida') || ln.includes('lancamento'))) ||
+        ln.includes('datadecompra') || ln.includes('datacompra') ||
+        (ln.includes('date') && ln.includes('amount')) ||
+        (ln.includes('data') && ln.includes('titulo'))
+      ) return i;
+    }
+    return lines.findIndex(l => l.trim().length > 0);
+  })();
   const rawHeader = headerLineIdx >= 0 ? lines[headerLineIdx] : '';
   const sep = detectSep(rawHeader);
   const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
@@ -768,6 +783,9 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
   const [detectedFmt, setDetectedFmt] = useState<CsvFormat>('generic');
   const [acctName, setAcctName] = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [fmtWarnPaused, setFmtWarnPaused] = useState(false);
+  const [isImageMode, setIsImageMode] = useState(false);
+  const [imageData, setImageData] = useState<{ base64: string; mediaType: string } | null>(null);
 
   useEffect(() => {
     try {
@@ -781,11 +799,59 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
   // Auto-advance steps 1 → 2 → 3 → 4
   useEffect(() => {
     if (pipeStep < 1 || pipeStep > 3) return;
-    const timer = setTimeout(() => {
+    if (fmtWarnPaused) return; // waiting for user to confirm unknown format
+    const timer = setTimeout(async () => {
       let newLogs: string[] = [];
       let earlyExit = false;
+      let pauseForFmtWarning = false;
       try {
         if (pipeStep === 1) {
+          // ── Image / screenshot mode ──────────────────────────────────
+          if (isImageMode && imageData) {
+            newLogs = pt
+              ? [`✓ Imagem detectada: ${fileName}`, `⟳ Analisando print com IA…`]
+              : [`✓ Image detected: ${fileName}`, `⟳ Analyzing screenshot with AI…`];
+            setLogs(prev => [...prev, ...newLogs]);
+            newLogs = [];
+            try {
+              const res = await fetch('/api/ocr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: imageData.base64, mediaType: imageData.mediaType, today: new Date().toISOString().slice(0, 10) }),
+              });
+              const data = await res.json();
+              if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
+              const raw: { date: string; merchant: string; amount: number; account?: string; installment?: string | null }[] = data.txns;
+              const result: Txn[] = raw.map(r => {
+                const { cat, sub } = catFor(r.merchant, r.amount);
+                const label = r.installment ? `${r.merchant} (${r.installment})` : r.merchant;
+                return { id: newId(), d: r.date, merch: label || r.merchant, cat, sub, acct: r.account || acctName || 'Screenshot', amt: r.amount };
+              }).filter(tx => tx.d && tx.amt !== 0);
+              setParsedTxns(result);
+              if (result.length === 0) {
+                newLogs = pt ? [`✗ Nenhuma transação encontrada na imagem`] : [`✗ No transactions found in image`];
+              } else {
+                newLogs = pt
+                  ? [`✓ ${result.length} transações extraídas da imagem`]
+                  : [`✓ ${result.length} transactions extracted from image`];
+              }
+            } catch (ocrErr: any) {
+              const m = ocrErr?.message ?? String(ocrErr);
+              if (m.includes('ANTHROPIC_API_KEY')) {
+                newLogs = pt
+                  ? [`✗ Chave da API não configurada`, `  Adicione ANTHROPIC_API_KEY no arquivo .env.local`]
+                  : [`✗ API key not configured`, `  Add ANTHROPIC_API_KEY to your .env.local file`];
+              } else {
+                newLogs = pt ? [`✗ Erro na análise da imagem: ${m}`] : [`✗ Image analysis error: ${m}`];
+              }
+              earlyExit = true;
+            }
+            setLogs(prev => [...prev, ...newLogs]);
+            setPipeStep(earlyExit ? 4 : 4); // always jump to review/confirm after OCR
+            return;
+          }
+
+          // ── Normal CSV mode ──────────────────────────────────────────
           const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
           setDetectedFmt(fmt);
           const fmtLabel: Record<CsvFormat, string> = {
@@ -794,7 +860,6 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
             ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
           };
           if (fmt === 'numbers') {
-            // Jump to step 4 so logs stay visible; parsedTxns stays [] so confirm is harmless
             newLogs = pt
               ? [`✗ Arquivo Apple Numbers detectado`, `  Exporte como CSV no Numbers: Arquivo → Exportar para → CSV`, `  Depois importe o arquivo .csv gerado`]
               : [`✗ Apple Numbers file detected`, `  Export as CSV in Numbers: File → Export To → CSV`, `  Then import the generated .csv file`];
@@ -803,10 +868,20 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
             setPipeStep(4);
             return;
           }
-          const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
-          newLogs = pt
-            ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
-            : [`✓ Format detected: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`];
+          if (fmt === 'generic') {
+            // Unknown format — warn and pause for user confirmation
+            const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
+            newLogs = pt
+              ? [`⚠ Formato não reconhecido`, `  Header: ${headerPreview}`, `  O analisador genérico tentará extrair data e valor.`, `  Confirme para continuar ou cancele.`]
+              : [`⚠ Unrecognized format`, `  Header: ${headerPreview}`, `  The generic parser will try to extract date and amount.`, `  Confirm to continue or cancel.`];
+            setFmtWarnPaused(true);
+            pauseForFmtWarning = true;
+          } else {
+            const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
+            newLogs = pt
+              ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
+              : [`✓ Format detected: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`];
+          }
         } else if (pipeStep === 2) {
           const nonEmpty = cleanLines(rawContent).filter(l => l.trim()).length;
           const dataRows = Math.max(0, nonEmpty - 1);
@@ -835,10 +910,12 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
         earlyExit = true;
       }
       setLogs(prev => [...prev, ...newLogs]);
-      setPipeStep(earlyExit ? 4 : s => s + 1);  // on error jump to review step so logs stay visible
+      if (!pauseForFmtWarning) {
+        setPipeStep(earlyExit ? 4 : s => s + 1);
+      }
     }, PIPE_DELAYS[pipeStep - 1]);
     return () => clearTimeout(timer);
-  }, [pipeStep, lang, rawContent, fileName, acctName]);
+  }, [pipeStep, lang, rawContent, fileName, acctName, fmtWarnPaused, isImageMode, imageData]);
 
   function handleFile(file: File) {
     setFileName(file.name);
@@ -846,14 +923,35 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
     setRawContent('');
     setLogs([]);
     setShowPreview(false);
-    const reader = new FileReader();
-    reader.onload = e => {
-      const content = (e.target?.result as string) ?? '';
-      setRawContent(content);
-      setLogs([pt ? `✓ Arquivo: ${file.name}` : `✓ File: ${file.name}`]);
-      setPipeStep(1);
-    };
-    reader.readAsText(file, 'utf-8');
+    setFmtWarnPaused(false);
+    setImageData(null);
+
+    const isImage = /\.(png|jpe?g|webp|heic|heif|gif)$/i.test(file.name) || file.type.startsWith('image/');
+    setIsImageMode(isImage);
+
+    if (isImage) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const dataUrl = (e.target?.result as string) ?? '';
+        // dataUrl is "data:<mediaType>;base64,<data>"
+        const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!match) { setLogs([pt ? '✗ Erro ao ler imagem' : '✗ Error reading image']); return; }
+        const [, mediaType, base64] = match;
+        setImageData({ base64, mediaType });
+        setLogs([pt ? `✓ Arquivo: ${file.name}` : `✓ File: ${file.name}`]);
+        setPipeStep(1);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const content = (e.target?.result as string) ?? '';
+        setRawContent(content);
+        setLogs([pt ? `✓ Arquivo: ${file.name}` : `✓ File: ${file.name}`]);
+        setPipeStep(1);
+      };
+      reader.readAsText(file, 'utf-8');
+    }
   }
 
   function handleConfirm(mode: 'merge' | 'replace') {
@@ -892,6 +990,9 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
     setLogs([]);
     setShowPreview(false);
     setAcctName('');
+    setFmtWarnPaused(false);
+    setIsImageMode(false);
+    setImageData(null);
   }
 
   const steps = pt ? PIPE_LABELS_PT : PIPE_LABELS_EN;
@@ -913,7 +1014,7 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
           <input
             ref={fileInputRef}
             type="file"
-            accept=".ofx,.qfx,.csv,.txt"
+            accept=".ofx,.qfx,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,.heif"
             style={{ display: 'none' }}
             onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }}
           />
@@ -943,10 +1044,10 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
                 {pt ? 'Arraste o arquivo ou clique para selecionar' : 'Drag file or click to select'}
               </div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
-                {pt ? 'Fatura CSV do C6, Nubank, ou arquivo OFX do seu banco' : 'C6 or Nubank CSV statement, or OFX from your bank'}
+                {pt ? 'CSV do C6/Nubank, OFX do banco, ou print da Wallet/app do C6' : 'C6/Nubank CSV, bank OFX, or screenshot from Wallet/C6 app'}
               </div>
               <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 14, flexWrap: 'wrap' }}>
-                {['CSV (C6)', 'CSV (Nubank)', 'OFX/QFX', 'CSV genérico'].map((f, i) => <span key={i} className="pill">{f}</span>)}
+                {['CSV (C6)', 'CSV (Nubank)', 'OFX/QFX', 'PNG/JPG'].map((f, i) => <span key={i} className="pill">{f}</span>)}
               </div>
             </div>
           )}
@@ -998,17 +1099,30 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
                 </div>
 
                 {/* Log output */}
-                <div style={{ padding: '12px 14px', background: 'var(--bg-2)', borderRadius: 8, marginBottom: awaitingConfirm ? 12 : 14, fontFamily: 'var(--font-mono)', fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
+                <div style={{ padding: '12px 14px', background: 'var(--bg-2)', borderRadius: 8, marginBottom: (awaitingConfirm || fmtWarnPaused) ? 12 : 14, fontFamily: 'var(--font-mono)', fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
                   {logs.map((l, i) => (
-                    <div key={i} style={{ color: l.startsWith('○') ? 'var(--ink-3)' : 'var(--ink)' }}>{l}</div>
+                    <div key={i} style={{ color: l.startsWith('○') ? 'var(--ink-3)' : l.startsWith('⚠') ? 'var(--warn, #f59e0b)' : 'var(--ink)' }}>{l}</div>
                   ))}
-                  {pipeStep < 4 && <span className="pipe-cursor" style={{ color: 'var(--ink-3)' }}>▌</span>}
+                  {pipeStep < 4 && !fmtWarnPaused && <span className="pipe-cursor" style={{ color: 'var(--ink-3)' }}>▌</span>}
                   {awaitingConfirm && (
                     <div style={{ marginTop: 8, color: 'var(--accent-fg)', fontWeight: 600 }}>
                       {pt ? '→ Pronto. Revise as transações abaixo e confirme.' : '→ Ready. Review transactions below and confirm.'}
                     </div>
                   )}
                 </div>
+
+                {/* Unknown format warning — pause before proceeding */}
+                {fmtWarnPaused && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '10px 12px', background: 'var(--warn-bg, #fffbeb)', border: '1px solid var(--warn, #f59e0b)', borderRadius: 8, marginBottom: 12 }}>
+                    <div style={{ flex: 1, fontSize: 12, color: 'var(--warn-fg, #92400e)' }}>
+                      {pt ? 'Formato não reconhecido. O analisador genérico tentará importar. Deseja continuar mesmo assim?' : 'Unrecognized format. The generic parser will try to import. Continue anyway?'}
+                    </div>
+                    <button className="btn sm" onClick={handleReset}>{pt ? 'Cancelar' : 'Cancel'}</button>
+                    <button className="btn primary sm" onClick={() => { setFmtWarnPaused(false); setPipeStep(2); }}>
+                      {pt ? 'Continuar mesmo assim' : 'Continue anyway'}
+                    </button>
+                  </div>
+                )}
 
                 {/* Transaction preview */}
                 {awaitingConfirm && parsedTxns.length > 0 && (
@@ -1080,9 +1194,9 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
                 <Icon name="lock" style={{ width: 17, height: 17, stroke: 'var(--accent-fg)' }} className="" />
               </div>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{pt ? 'Tudo processado localmente' : 'Everything processed locally'}</div>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{pt ? 'Privacidade' : 'Privacy'}</div>
                 <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 4, lineHeight: 1.55 }}>
-                  {pt ? 'Seus arquivos são analisados no seu navegador. Nada é enviado para servidores.' : 'Files are analyzed in your browser. Nothing is sent to external servers.'}
+                  {pt ? 'CSVs e OFX são analisados localmente no navegador. Prints de tela são enviados à API da Anthropic para extração de texto.' : 'CSVs and OFX are analyzed locally in the browser. Screenshots are sent to the Anthropic API for text extraction.'}
                 </div>
               </div>
             </div>
@@ -1095,7 +1209,7 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
                 { t: 'CSV — Nubank', ext: '.csv', desc: pt ? 'Exportado do app Nubank' : 'Exported from Nubank app', ok: true },
                 { t: 'OFX / QFX', ext: '.ofx', desc: pt ? 'Padrão bancário internacional (Inter, Bradesco…)' : 'Open Financial Exchange (Inter, Bradesco…)', ok: true },
                 { t: 'CSV genérico', ext: '.csv', desc: pt ? 'Qualquer CSV com data e valor' : 'Any CSV with date and amount', ok: true },
-                { t: pt ? 'PDF / Imagem' : 'PDF / Image', ext: '.pdf', desc: pt ? 'Em desenvolvimento' : 'Coming soon', ok: false },
+                { t: pt ? 'Print — Apple Wallet / app C6' : 'Screenshot — Apple Wallet / C6 app', ext: '.png .jpg', desc: pt ? 'Print da tela com transações visíveis (requer ANTHROPIC_API_KEY)' : 'Screenshot with visible transactions (requires ANTHROPIC_API_KEY)', ok: true },
               ].map((f, i) => (
                 <div key={i} style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: i < 4 ? '1px solid var(--border)' : 'none', opacity: f.ok ? 1 : 0.45 }}>
                   <Icon name="file" style={{ width: 15, height: 15, stroke: f.ok ? 'var(--accent-fg)' : 'var(--ink-3)' }} className="" />
@@ -1135,6 +1249,38 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
             ))}
           </div>
         )}
+      </div>
+
+      {/* Clear all data */}
+      <div className="card" style={{ borderColor: 'var(--danger, #ef4444)' }}>
+        <div className="card-head">
+          <h3 className="card-title" style={{ color: 'var(--danger, #ef4444)' }}>
+            {pt ? 'Zona de perigo' : 'Danger zone'}
+          </h3>
+        </div>
+        <div style={{ padding: '16px' }}>
+          <p style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 12 }}>
+            {pt
+              ? 'Remove todas as transações e o histórico de importações permanentemente.'
+              : 'Permanently removes all transactions and import history.'}
+          </p>
+          <button
+            className="btn"
+            style={{ background: 'var(--danger, #ef4444)', color: '#fff', borderColor: 'var(--danger, #ef4444)' }}
+            onClick={() => {
+              const msg = pt
+                ? 'Tem certeza? Isso apagará TODAS as transações e o histórico de importações. Esta ação não pode ser desfeita.'
+                : 'Are you sure? This will delete ALL transactions and import history. This cannot be undone.';
+              if (!confirm(msg)) return;
+              localStorage.removeItem('fp_txns');
+              localStorage.removeItem('fp_imports');
+              localStorage.removeItem('fp_state');
+              window.location.reload();
+            }}
+          >
+            {pt ? 'Limpar todos os dados' : 'Clear all data'}
+          </button>
+        </div>
       </div>
     </div>
   );
