@@ -498,23 +498,27 @@ function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep:
   const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
   const headerCols = splitLine(rawHeader, sep).map(c => norm(c));
 
-  // C6 Fatura (credit card bill): has "Data de Compra" + "Final do Cartão" or "Cotação"
-  const hasDataCompra = headerCols.some(c => c.includes('datacompra') || c.includes('dtcompra'));
-  const hasFinalCartao = headerCols.some(c => c.includes('finalcartao') || c.includes('finalcard') || c.includes('finalc') || c.includes('final'));
-  const hasCotacao = headerCols.some(c => c.includes('cotacao') || c.includes('cotac'));
-  const hasValorRS = headerCols.some(c => (c.includes('valor') && (c.includes('rs') || c.endsWith('r$') || c === 'valorr' || c.includes('valorr'))));
-  if (hasDataCompra || (hasFinalCartao && hasCotacao) || (hasFinalCartao && hasValorRS)) {
+  // C6 Fatura (credit card bill) — check multiple indicators, any one is sufficient
+  // "Data de Compra" normalizes to "datadecompra" (not "datacompra"!) — check both
+  const hasDataCompra  = headerCols.some(c => c.includes('datadecompra') || c.includes('datacompra') || c.includes('dtcompra'));
+  // "Final do Cartão" normalizes to "finaldocartao"
+  const hasFinalCartao = headerCols.some(c => c.includes('finaldocartao') || c.includes('finalcartao') || c.includes('final'));
+  // "Cotação" normalizes to "cotacao" in the middle of "cotacaoemr"
+  const hasCotacao     = headerCols.some(c => c.includes('cotacao'));
+  // "Parcela" has no accents — always reliable
+  const hasParcela     = headerCols.some(c => c === 'parcela' || c.startsWith('parc'));
+  if (hasDataCompra || (hasFinalCartao && hasCotacao) || (hasFinalCartao && hasParcela)) {
     return { fmt: 'c6fatura', sep, headerIdx: headerLineIdx };
   }
 
   // C6 Extrato (bank statement): has Entrada + Saída
   const hasEntrada = headerCols.some(c => c.includes('entrada'));
-  const hasSaida = headerCols.some(c => c.includes('saida'));
+  const hasSaida   = headerCols.some(c => c.includes('saida'));
   if (hasEntrada && hasSaida) return { fmt: 'c6', sep, headerIdx: headerLineIdx };
 
-  // Nubank: date/data + title + amount (3 columns) or date + category + title + amount (4)
-  const hasDate = headerCols.some(c => c === 'date' || c === 'data');
-  const hasAmt = headerCols.some(c => c === 'amount' || c === 'valor');
+  // Nubank: date/data + title + amount (3 columns)
+  const hasDate  = headerCols.some(c => c === 'date' || c === 'data');
+  const hasAmt   = headerCols.some(c => c === 'amount' || c === 'valor');
   const hasTitle = headerCols.some(c => c === 'title' || c === 'titulo');
   if (hasDate && hasAmt && hasTitle) return { fmt: 'nubank', sep, headerIdx: headerLineIdx };
 
@@ -522,9 +526,11 @@ function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep:
   if (headSample.includes('inter bank') || headSample.includes('banco inter')) return { fmt: 'inter', sep, headerIdx: headerLineIdx };
   if (headSample.includes('bradesco')) return { fmt: 'bradesco', sep, headerIdx: headerLineIdx };
 
-  // Heuristic: first data line has DD/MM/YYYY → likely C6 extrato
-  const firstDataLine = lines.find(l => /\d{2}\/\d{2}\/\d{4}/.test(l));
-  if (firstDataLine) return { fmt: 'c6', sep: detectSep(firstDataLine), headerIdx: headerLineIdx };
+  // Heuristic: DD/MM/YYYY data rows but no recognisable header → generic C6 extrato
+  // Only trigger if the file also has "entrada" or "saida" somewhere in the content
+  const hasEntradaInFile = content.toLowerCase().includes('entrada');
+  const firstDataLine    = lines.find(l => /\d{2}\/\d{2}\/\d{4}/.test(l));
+  if (firstDataLine && hasEntradaInFile) return { fmt: 'c6', sep: detectSep(firstDataLine), headerIdx: headerLineIdx };
 
   return { fmt: 'generic', sep, headerIdx: headerLineIdx };
 }
@@ -772,49 +778,59 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
     if (pipeStep < 1 || pipeStep > 3) return;
     const timer = setTimeout(() => {
       let newLogs: string[] = [];
-      if (pipeStep === 1) {
-        const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
-        setDetectedFmt(fmt);
-        const fmtLabel: Record<CsvFormat, string> = {
-          c6: 'C6 Bank Extrato CSV', c6fatura: 'C6 Bank Fatura CSV',
-          nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV',
-          ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
-        };
-        if (fmt === 'numbers') {
+      let earlyExit = false;
+      try {
+        if (pipeStep === 1) {
+          const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
+          setDetectedFmt(fmt);
+          const fmtLabel: Record<CsvFormat, string> = {
+            c6: 'C6 Bank Extrato CSV', c6fatura: 'C6 Bank Fatura CSV',
+            nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV',
+            ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
+          };
+          if (fmt === 'numbers') {
+            // Jump to step 4 so logs stay visible; parsedTxns stays [] so confirm is harmless
+            newLogs = pt
+              ? [`✗ Arquivo Apple Numbers detectado`, `  Exporte como CSV no Numbers: Arquivo → Exportar para → CSV`, `  Depois importe o arquivo .csv gerado`]
+              : [`✗ Apple Numbers file detected`, `  Export as CSV in Numbers: File → Export To → CSV`, `  Then import the generated .csv file`];
+            setLogs(prev => [...prev, ...newLogs]);
+            setParsedTxns([]);
+            setPipeStep(4);
+            return;
+          }
+          const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
           newLogs = pt
-            ? [`✗ Arquivo Apple Numbers detectado`, `  Exporte como CSV no Numbers: Arquivo → Exportar para → CSV`, `  Depois importe o arquivo .csv gerado`]
-            : [`✗ Apple Numbers file detected`, `  Export as CSV in Numbers: File → Export To → CSV`, `  Then import the generated .csv file`];
-          setLogs(prev => [...prev, ...newLogs]);
-          setPipeStep(0); // abort pipeline
-          return;
+            ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
+            : [`✓ Format detected: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`];
+        } else if (pipeStep === 2) {
+          const nonEmpty = cleanLines(rawContent).filter(l => l.trim()).length;
+          const dataRows = Math.max(0, nonEmpty - 1);
+          newLogs = pt
+            ? [`✓ ${dataRows} linhas de dados encontradas`, `✓ Iniciando categorização inteligente`]
+            : [`✓ ${dataRows} data rows found`, `✓ Starting smart categorization`];
+        } else if (pipeStep === 3) {
+          const { txns: result } = parseFile(rawContent, fileName, acctName || undefined);
+          setParsedTxns(result);
+          if (result.length === 0) {
+            newLogs = pt
+              ? [`✗ Nenhuma transação encontrada`, `  Verifique se o arquivo é um CSV válido do C6 ou Nubank`]
+              : [`✗ No transactions found`, `  Check that the file is a valid C6 or Nubank CSV`];
+          } else {
+            const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
+            const categorized = result.length - uncategorized;
+            newLogs = pt
+              ? [`✓ ${result.length} transações extraídas`, `✓ ${categorized} categorizadas automaticamente`, uncategorized > 0 ? `○ ${uncategorized} com categoria genérica` : `✓ Todas categorizadas com sucesso`]
+              : [`✓ ${result.length} transactions extracted`, `✓ ${categorized} auto-categorized`, uncategorized > 0 ? `○ ${uncategorized} with generic category` : `✓ All categorized successfully`];
+          }
         }
-        const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
+      } catch (err: any) {
         newLogs = pt
-          ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
-          : [`✓ Format detected: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`];
-      } else if (pipeStep === 2) {
-        const nonEmpty = cleanLines(rawContent).filter(l => l.trim()).length;
-        const dataRows = Math.max(0, nonEmpty - 1);
-        newLogs = pt
-          ? [`✓ ${dataRows} linhas de dados encontradas`, `✓ Iniciando categorização inteligente`]
-          : [`✓ ${dataRows} data rows found`, `✓ Starting smart categorization`];
-      } else if (pipeStep === 3) {
-        const { txns: result } = parseFile(rawContent, fileName, acctName || undefined);
-        setParsedTxns(result);
-        if (result.length === 0) {
-          newLogs = pt
-            ? [`✗ Nenhuma transação encontrada`, `  Verifique se o arquivo é um CSV válido do C6 ou Nubank`]
-            : [`✗ No transactions found`, `  Check that the file is a valid C6 or Nubank CSV`];
-        } else {
-          const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
-          const categorized = result.length - uncategorized;
-          newLogs = pt
-            ? [`✓ ${result.length} transações extraídas`, `✓ ${categorized} categorizadas automaticamente`, uncategorized > 0 ? `○ ${uncategorized} com categoria genérica` : `✓ Todas categorizadas com sucesso`]
-            : [`✓ ${result.length} transactions extracted`, `✓ ${categorized} auto-categorized`, uncategorized > 0 ? `○ ${uncategorized} with generic category` : `✓ All categorized successfully`];
-        }
+          ? [`✗ Erro ao processar: ${err?.message ?? String(err)}`]
+          : [`✗ Error processing file: ${err?.message ?? String(err)}`];
+        earlyExit = true;
       }
       setLogs(prev => [...prev, ...newLogs]);
-      setPipeStep(s => s + 1);
+      setPipeStep(earlyExit ? 4 : s => s + 1);  // on error jump to review step so logs stay visible
     }, PIPE_DELAYS[pipeStep - 1]);
     return () => clearTimeout(timer);
   }, [pipeStep, lang, rawContent, fileName, acctName]);
