@@ -591,8 +591,8 @@ function catFor(text: string, amt: number): { cat: string; sub: string } {
     return { cat: 'income', sub: 'Outros' };
   }
 
-  // Transfer / credit card payment (includes C6 "Pagamento recebido" entries)
-  if (/fatura de cart|pgto fat cartao|pagamento fatura|pagto cartão|pagamento recebido|pgto receb|bill payment/.test(s)) return { cat: 'transfer', sub: 'Pagamento' };
+  // Transfer / credit card payment (includes C6 "Pagamento recebido" entries and standalone "pagamento")
+  if (/^pagamento$|fatura de cart|pgto fat cartao|pagamento fatura|pagto cartão|pagamento recebido|pgto receb|bill payment/.test(s)) return { cat: 'transfer', sub: 'Pagamento' };
   if (/transf.*pix|pix.*envi|transferência|ted |doc /.test(s)) return { cat: 'transfer', sub: 'Pix enviado' };
 
   // Transport
@@ -1067,6 +1067,89 @@ function parseGenericCSV(content: string, acct = 'Importado', sep = ','): Txn[] 
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
 
+/* ── C6 App paste-text parser ───────────────────────────────────── */
+// Handles text copied from the C6 Bank mobile app (open invoices, statement screens).
+// Each transaction block: [Date header] → [Category line] → [Merchant] → [Amount] → [Amount (bold repeat)] → [optional: EM NX]
+function parseC6AppText(text: string, acct = 'C6 Bank'): Txn[] {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const results: Txn[] = [];
+
+  const AMT_RE  = /^R\$\s*([\d.]+,\d{2})$/;
+  // Matches "Hoje, DD/MM/YY", "Quinta-feira, DD/MM/YY", etc.
+  const DATE_RE = /(Hoje|Ontem|Segunda|Ter[cç]a|Quarta|Quinta|Sexta|S[aá]bado|Domingo)(?:-feira)?,?\s+(\d{1,2})\/(\d{2})\/(\d{2,4})/i;
+  const INST_RE = /^EM\s+(\d+)\s*X$/i;
+  // C6 category lines: contain "/" or match known Portuguese banking category words
+  const CAT_RE  = /\/|Associa[çc]|Recreativo|Transporte|El[eé]trico|Empresa\s+(?:para|servi)|Servi[çc]os?\s+(?:Prof|Pess|Tele|Aut)|Departamento|Especialidade\s+varejo|Supermercado|Restaurante|Lanchon|Vestu[aá]rio|Arte\s+\/|Artesanato|Relacionados.*[Aa]utomotivo/i;
+
+  let currentDate = new Date().toISOString().slice(0, 10);
+  let pendingCat  = '';
+  let pendingMerch = '';
+  let lastAmtStr  = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Date header
+    const dm = line.match(DATE_RE);
+    if (dm) {
+      const [, , day, mon, yr] = dm;
+      const year = yr.length === 2 ? `20${yr}` : yr;
+      currentDate = `${year}-${mon.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      pendingMerch = '';
+      lastAmtStr   = '';
+      continue;
+    }
+
+    // "EM NX" installment marker — applies to the last emitted txn
+    const im = line.match(INST_RE);
+    if (im) {
+      const total = parseInt(im[1], 10);
+      if (results.length > 0 && !results[results.length - 1].installment) {
+        results[results.length - 1].installment = `1/${total}`;
+      }
+      continue;
+    }
+
+    // Amount line
+    const am = line.match(AMT_RE);
+    if (am) {
+      const amtStr = am[1];
+      if (amtStr === lastAmtStr) {
+        // Bold-repeat duplicate — skip it and reset so the next txn can start
+        lastAmtStr = '';
+        continue;
+      }
+      lastAmtStr = amtStr;
+      if (pendingMerch) {
+        const amtRaw = parseFloat(amtStr.replace(/\./g, '').replace(',', '.'));
+        if (!isNaN(amtRaw) && amtRaw !== 0) {
+          const amt = -amtRaw; // C6 app shows positive amounts; outflows become negative
+          const { cat, sub } = catFor(`${pendingMerch} ${pendingCat}`, amt);
+          results.push({ id: newId(), d: currentDate, merch: pendingMerch, cat, sub, acct, amt, kind: 'card' });
+          pendingMerch = '';
+        }
+      }
+      continue;
+    }
+
+    // Category line
+    if (CAT_RE.test(line)) {
+      pendingCat   = line;
+      pendingMerch = '';
+      lastAmtStr   = '';
+      continue;
+    }
+
+    // Merchant name — anything else non-trivial
+    if (line.length >= 2) {
+      pendingMerch = line;
+      lastAmtStr   = '';
+    }
+  }
+
+  return results.sort((a, b) => b.d.localeCompare(a.d));
+}
+
 /* ── Route file to parser ────────────────────────────────────────── */
 function parseFile(content: string, filename: string, acct?: string): { txns: Txn[]; fmt: CsvFormat; rawHeader: string } {
   const { fmt, sep, headerIdx } = detectFormat(content, filename);
@@ -1099,6 +1182,8 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
   const [fmtWarnPaused, setFmtWarnPaused] = useState(false);
   const [isImageMode, setIsImageMode] = useState(false);
   const [imageData, setImageData] = useState<{ base64: string; mediaType: string } | null>(null);
+  const [isPasteMode, setIsPasteMode] = useState(false);
+  const [pasteText, setPasteText] = useState('');
 
   useEffect(() => {
     try {
@@ -1154,6 +1239,30 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
                 ? [`✗ Erro ao processar imagem: ${ocrErr?.message ?? String(ocrErr)}`]
                 : [`✗ Image processing error: ${ocrErr?.message ?? String(ocrErr)}`];
               earlyExit = true;
+            }
+            setLogs(prev => [...prev, ...newLogs]);
+            setPipeStep(4);
+            return;
+          }
+
+          // ── Paste text mode (C6 App statement) ──────────────────────
+          if (isPasteMode && pasteText) {
+            newLogs = pt
+              ? [`✓ Texto colado detectado`, `⟳ Analisando formato C6 App…`]
+              : [`✓ Pasted text detected`, `⟳ Parsing C6 App format…`];
+            setLogs(prev => [...prev, ...newLogs]);
+            newLogs = [];
+            const result = parseC6AppText(pasteText, acctName || 'C6 Bank');
+            setParsedTxns(result);
+            setDetectedFmt('c6fatura');
+            if (result.length === 0) {
+              newLogs = [pt ? '✗ Nenhuma transação encontrada. Verifique o formato do texto.' : '✗ No transactions found. Check the text format.'];
+            } else {
+              const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
+              newLogs = [
+                pt ? `✓ ${result.length} transações extraídas (C6 App)` : `✓ ${result.length} transactions extracted (C6 App)`,
+                uncategorized > 0 ? `○ ${uncategorized} com categoria genérica` : `✓ Todas categorizadas`,
+              ];
             }
             setLogs(prev => [...prev, ...newLogs]);
             setPipeStep(4);
@@ -1244,7 +1353,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
       }
     }, PIPE_DELAYS[pipeStep - 1]);
     return () => clearTimeout(timer);
-  }, [pipeStep, lang, rawContent, fileName, acctName, fmtWarnPaused, isImageMode, imageData]);
+  }, [pipeStep, lang, rawContent, fileName, acctName, fmtWarnPaused, isImageMode, imageData, isPasteMode, pasteText]);
 
   function handleFile(file: File) {
     setFileName(file.name);
@@ -1325,6 +1434,8 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
     setFmtWarnPaused(false);
     setIsImageMode(false);
     setImageData(null);
+    setIsPasteMode(false);
+    setPasteText('');
   }
 
   const steps = pt ? PIPE_LABELS_PT : PIPE_LABELS_EN;
@@ -1351,6 +1462,18 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
             onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }}
           />
 
+          {/* Mode toggle */}
+          {!isProcessing && !isDone && (
+            <div className="seg" style={{ marginBottom: 10, fontSize: 12 }}>
+              <button className={!isPasteMode ? 'on' : ''} onClick={() => setIsPasteMode(false)}>
+                📁 {pt ? 'Arquivo' : 'File'}
+              </button>
+              <button className={isPasteMode ? 'on' : ''} onClick={() => setIsPasteMode(true)}>
+                📋 {pt ? 'Colar texto (C6 App)' : 'Paste text (C6 App)'}
+              </button>
+            </div>
+          )}
+
           {isDone ? (
             <div className="dz" style={{ background: 'var(--accent-bg)', borderColor: 'var(--accent-fg)', cursor: 'default' }}>
               <Icon name="check" style={{ width: 38, height: 38, stroke: 'var(--accent-fg)', strokeWidth: 1.5 }} className="" />
@@ -1361,6 +1484,36 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
               <button className="btn sm" style={{ marginTop: 14 }} onClick={handleReset}>
                 {pt ? 'Importar outro arquivo' : 'Import another file'}
               </button>
+            </div>
+          ) : isPasteMode && !isProcessing ? (
+            <div>
+              <textarea
+                value={pasteText}
+                onChange={e => setPasteText(e.target.value)}
+                placeholder={pt
+                  ? 'Cole aqui o texto copiado do app do C6 Bank (extrato ou fatura aberta)…\n\nExemplo:\nHoje, 24/04/26\nRestaurante / Lanchonete / Bar\nALBUONI PIZZERIA\nR$ 58,98\nR$ 58,98'
+                  : 'Paste text copied from the C6 Bank app (statement or open invoice)…\n\nExample:\nHoje, 24/04/26\nRestaurante / Lanchonete / Bar\nALBUONI PIZZERIA\nR$ 58,98\nR$ 58,98'}
+                style={{ width: '100%', minHeight: 200, padding: '12px 14px', border: '1.5px solid var(--border)', borderRadius: 10, fontSize: 12.5, fontFamily: 'var(--font-mono)', lineHeight: 1.65, background: 'var(--bg-2)', color: 'var(--ink)', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+              <button
+                className="btn primary"
+                style={{ marginTop: 8, width: '100%' }}
+                disabled={!pasteText.trim()}
+                onClick={() => {
+                  setFileName(pt ? 'fatura-c6-colada.txt' : 'c6-pasted.txt');
+                  setLogs([pt ? `✓ Processando texto colado…` : `✓ Processing pasted text…`]);
+                  setParsedTxns([]);
+                  setShowPreview(false);
+                  setPipeStep(1);
+                }}
+              >
+                {pt ? 'Processar texto' : 'Process text'}
+              </button>
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.6 }}>
+                {pt
+                  ? 'Copie o extrato diretamente do app C6. Funciona com faturas abertas que ainda não foram exportadas como CSV.'
+                  : 'Copy statement text directly from the C6 app. Works with open invoices not yet available as CSV.'}
+              </div>
             </div>
           ) : (
             <div
