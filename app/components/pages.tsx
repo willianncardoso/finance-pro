@@ -436,34 +436,87 @@ function catFor(text: string, amt: number): { cat: string; sub: string } {
   return { cat: 'shopping', sub: 'Outros' };
 }
 
-/* ── CSV line parser (respects quoted commas) ───────────────────── */
-function parseCSVLine(line: string): string[] {
+/* ── CSV line splitter (comma or semicolon, handles quotes) ────── */
+function splitLine(line: string, sep: string): string[] {
   const cols: string[] = [];
   let cur = '', inQ = false;
   for (const ch of line) {
-    if (ch === '"') inQ = !inQ;
-    else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+    if (ch === '"') { inQ = !inQ; }
+    else if (ch === sep && !inQ) { cols.push(cur.trim()); cur = ''; }
     else cur += ch;
   }
   cols.push(cur.trim());
   return cols;
 }
 
+// Detect whether the file uses comma or semicolon as separator
+function detectSep(header: string): string {
+  const commas = (header.match(/,/g) ?? []).length;
+  const semis = (header.match(/;/g) ?? []).length;
+  return semis > commas ? ';' : ',';
+}
+
+function parseCSVLine(line: string): string[] { return splitLine(line, ','); }
+
+// Strip BOM + normalize line endings, return clean lines
+function cleanLines(content: string): string[] {
+  return content.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+// Parse a BRL/generic numeric string: "1.234,56" → 1234.56 or "1234.56" → 1234.56
+function parseBRLNum(s: string): number {
+  const t = s.trim().replace(/['"]/g, '');
+  // BRL format: thousands dot, decimal comma
+  if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(t)) return parseFloat(t.replace(/\./g, '').replace(',', '.'));
+  // US/ISO format
+  if (/^-?\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+  // Comma only (e.g. "45,90")
+  if (/^-?\d+(,\d+)?$/.test(t)) return parseFloat(t.replace(',', '.'));
+  return NaN;
+}
+
 /* ── Format detection ───────────────────────────────────────────── */
 type CsvFormat = 'c6' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic';
 
-function detectFormat(content: string, filename: string): CsvFormat {
+function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep: string; headerIdx: number } {
   const fn = filename.toLowerCase();
-  const head = content.slice(0, 2000).toLowerCase();
-  if (fn.endsWith('.ofx') || fn.endsWith('.qfx') || head.includes('<ofx>') || head.includes('<stmttrn>')) return 'ofx';
-  if (head.includes('entrada') && head.includes('saída') && (head.includes('c6') || head.includes('data,saldo') || head.includes('titulo'))) return 'c6';
-  if (head.startsWith('date,category,title,amount') || head.startsWith('data,categoria,titulo,valor')) return 'nubank';
-  if (head.includes('inter bank') || head.includes('banco inter')) return 'inter';
-  if (head.includes('bradesco') || head.includes('next') && head.includes('agencia')) return 'bradesco';
-  // Heuristic: first data line looks like DD/MM/YYYY
-  const firstLine = content.split('\n').find(l => /\d{2}\/\d{2}\/\d{4}/.test(l));
-  if (firstLine) return 'c6';
-  return 'generic';
+  const lines = cleanLines(content);
+  const headSample = lines.slice(0, 8).join('\n').toLowerCase();
+
+  // OFX
+  if (fn.endsWith('.ofx') || fn.endsWith('.qfx') || headSample.includes('<ofx>') || headSample.includes('<stmttrn>')) {
+    return { fmt: 'ofx', sep: ',', headerIdx: 0 };
+  }
+
+  // Find the actual header row (first non-empty line)
+  const headerLineIdx = lines.findIndex(l => l.trim().length > 0);
+  const rawHeader = headerLineIdx >= 0 ? lines[headerLineIdx] : '';
+  const sep = detectSep(rawHeader);
+  const headerCols = splitLine(rawHeader, sep).map(c => c.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''));
+
+  // C6: has columns like data, saldo, titulo, descricao, entrada, saida
+  const hasEntrada = headerCols.some(c => c.includes('entrada'));
+  const hasSaida = headerCols.some(c => c.includes('saida') || c.includes('saída'));
+  const hasData = headerCols.some(c => c === 'data' || c.startsWith('data'));
+  const hasTitulo = headerCols.some(c => c.includes('titulo') || c.includes('título'));
+  if (hasEntrada && hasSaida) return { fmt: 'c6', sep, headerIdx: headerLineIdx };
+
+  // Nubank: date/data + category/categoria + title/titulo + amount/valor
+  const hasDate = headerCols.some(c => c === 'date' || c === 'data');
+  const hasAmt = headerCols.some(c => c === 'amount' || c === 'valor');
+  const hasCat = headerCols.some(c => c === 'category' || c === 'categoria');
+  const hasTitle = headerCols.some(c => c === 'title' || c === 'titulo');
+  if (hasDate && hasAmt && (hasCat || hasTitle)) return { fmt: 'nubank', sep, headerIdx: headerLineIdx };
+
+  // Inter / Bradesco fallbacks
+  if (headSample.includes('inter bank') || headSample.includes('banco inter')) return { fmt: 'inter', sep, headerIdx: headerLineIdx };
+  if (headSample.includes('bradesco')) return { fmt: 'bradesco', sep, headerIdx: headerLineIdx };
+
+  // Heuristic: first data line has DD/MM/YYYY pattern → likely C6 or similar
+  const firstDataLine = lines.find(l => /\d{2}\/\d{2}\/\d{4}/.test(l));
+  if (firstDataLine) return { fmt: 'c6', sep: detectSep(firstDataLine), headerIdx: headerLineIdx };
+
+  return { fmt: 'generic', sep, headerIdx: headerLineIdx };
 }
 
 /* ── C6 Bank CSV parser ─────────────────────────────────────────── */
@@ -480,25 +533,45 @@ function c6Merchant(titulo: string, desc: string): string {
   return d;
 }
 
-function parseC6CSV(content: string, acct = 'C6 Bank'): Txn[] {
-  const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
-  const lines = clean.split('\n');
-  const headerIdx = lines.findIndex(l => /entrada/i.test(l) && /sa[íi]da/i.test(l));
+function parseC6CSV(content: string, acct = 'C6 Bank', sep = ',', hIdx = -1): Txn[] {
+  const lines = cleanLines(content);
+  // Find header row: contains both "entrada" and "saída/saida"
+  const headerIdx = hIdx >= 0 ? hIdx : lines.findIndex(l => {
+    const n = l.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return n.includes('entrada') && n.includes('saida');
+  });
   if (headerIdx < 0) return [];
+
+  // Map header columns → indices
+  const headerCols = splitLine(lines[headerIdx], sep).map(c =>
+    c.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
+  );
+  const idxOf = (key: string) => headerCols.findIndex(c => c.includes(key));
+  const iDate = idxOf('data') >= 0 ? idxOf('data') : 0;
+  const iTitulo = idxOf('titulo') >= 0 ? idxOf('titulo') : 2;
+  const iDesc = idxOf('descri') >= 0 ? idxOf('descri') : 3;
+  const iEntrada = idxOf('entrada') >= 0 ? idxOf('entrada') : headerCols.length - 2;
+  const iSaida = idxOf('saida') >= 0 ? idxOf('saida') : headerCols.length - 1;
+
   const txns: Txn[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-    const cols = parseCSVLine(line);
-    if (cols.length < 6) continue;
-    const [dateStr, , titulo, descricao, entradaStr, saidaStr] = cols;
+    const cols = splitLine(line, sep);
+    if (cols.length < 3) continue;
+    const dateStr = cols[iDate] ?? '';
     const parts = dateStr.split('/');
     if (parts.length !== 3) continue;
     const d = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    const entrada = parseFloat(entradaStr.replace(/\./g, '').replace(',', '.')) || 0;
-    const saida = parseFloat(saidaStr.replace(/\./g, '').replace(',', '.')) || 0;
-    if (entrada === 0 && saida === 0) continue;
-    const amt = entrada > 0 ? entrada : -saida;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    const titulo = cols[iTitulo] ?? '';
+    const descricao = cols[iDesc] ?? '';
+    const entrada = parseBRLNum(cols[iEntrada] ?? '');
+    const saida = parseBRLNum(cols[iSaida] ?? '');
+    const entradaV = isNaN(entrada) ? 0 : entrada;
+    const saidaV = isNaN(saida) ? 0 : saida;
+    if (entradaV === 0 && saidaV === 0) continue;
+    const amt = entradaV > 0 ? entradaV : -saidaV;
     const merch = c6Merchant(titulo, descricao);
     const { cat, sub } = catFor(`${titulo} ${descricao}`, amt);
     txns.push({ id: newId(), d, merch, cat, sub, acct, amt });
@@ -507,23 +580,32 @@ function parseC6CSV(content: string, acct = 'C6 Bank'): Txn[] {
 }
 
 /* ── Nubank CSV parser ──────────────────────────────────────────── */
-// Format: date,category,title,amount  (amount is always positive expense)
-function parseNubankCSV(content: string, acct = 'Nubank'): Txn[] {
-  const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
-  const lines = clean.split('\n').filter(l => l.trim());
+function parseNubankCSV(content: string, acct = 'Nubank', sep = ',', hIdx = -1): Txn[] {
+  const lines = cleanLines(content).filter(l => l.trim());
   if (lines.length < 2) return [];
+
+  const headerIdx = hIdx >= 0 ? hIdx : 0;
+  const headerCols = splitLine(lines[headerIdx], sep).map(c =>
+    c.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
+  );
+  const idxOf = (key: string) => headerCols.findIndex(c => c.includes(key));
+  const iDate = idxOf('date') >= 0 ? idxOf('date') : idxOf('data') >= 0 ? idxOf('data') : 0;
+  const iTitle = idxOf('title') >= 0 ? idxOf('title') : idxOf('titulo') >= 0 ? idxOf('titulo') : 2;
+  const iAmt = idxOf('amount') >= 0 ? idxOf('amount') : idxOf('valor') >= 0 ? idxOf('valor') : 3;
+
   const txns: Txn[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCSVLine(lines[i]);
-    if (cols.length < 4) continue;
-    const [dateStr, , titulo, amtStr] = cols;
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const cols = splitLine(lines[i], sep);
+    if (cols.length < 3) continue;
+    const dateStr = cols[iDate]?.trim() ?? '';
     if (!dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) continue;
-    const raw = parseFloat(amtStr.replace(',', '.'));
+    const titulo = cols[iTitle]?.trim() ?? '';
+    const raw = parseBRLNum(cols[iAmt] ?? '');
     if (isNaN(raw)) continue;
-    // Nubank: positive = expense (debit), negative = refund/credit
-    const amt = -raw; // invert: we store expenses as negative
+    // Nubank credit card: positive = expense, negative = credit/refund
+    const amt = -raw;
     const { cat, sub } = catFor(titulo, amt);
-    txns.push({ id: newId(), d: dateStr, merch: titulo.trim(), cat, sub, acct, amt });
+    txns.push({ id: newId(), d: dateStr, merch: titulo, cat, sub, acct, amt });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -531,49 +613,51 @@ function parseNubankCSV(content: string, acct = 'Nubank'): Txn[] {
 /* ── OFX parser ─────────────────────────────────────────────────── */
 function parseOFX(content: string, acct = 'Importado'): Txn[] {
   const txns: Txn[] = [];
-  const blocks = content.split(/<\/?STMTTRN>/i).filter((_, i) => i % 2 === 1);
+  // Handle both SGML (no closing tags) and XML OFX
+  const normalized = content.replace(/<\/STMTTRN>/gi, '</STMTTRN>');
+  const blocks = normalized.split(/<STMTTRN>/i).slice(1);
   for (const block of blocks) {
     const get = (tag: string) => {
-      const m = block.match(new RegExp(`<${tag}>([^\n<]*)`, 'i'));
+      const m = block.match(new RegExp(`<${tag}>\\s*([^\n<]+)`, 'i'));
       return m ? m[1].trim() : '';
     };
     const dtRaw = get('DTPOSTED');
-    if (!dtRaw) continue;
+    if (!dtRaw || dtRaw.length < 8) continue;
     const d = `${dtRaw.slice(0, 4)}-${dtRaw.slice(4, 6)}-${dtRaw.slice(6, 8)}`;
-    const amtRaw = parseFloat(get('TRNAMT').replace(',', '.'));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    const amtStr = get('TRNAMT');
+    const amtRaw = parseFloat(amtStr.replace(',', '.'));
     if (isNaN(amtRaw)) continue;
     const merch = get('MEMO') || get('NAME') || get('FITID');
     const { cat, sub } = catFor(merch, amtRaw);
-    txns.push({ id: newId(), d, merch: merch.slice(0, 60), cat, sub, acct, amt: amtRaw });
+    txns.push({ id: newId(), d, merch: merch.slice(0, 80), cat, sub, acct, amt: amtRaw });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
 
-/* ── Generic CSV parser (best-effort) ──────────────────────────── */
-function parseGenericCSV(content: string, acct = 'Importado'): Txn[] {
-  const clean = content.replace(/^﻿/, '').replace(/\r/g, '');
-  const lines = clean.split('\n').filter(l => l.trim());
+/* ── Generic CSV parser (best-effort, column-sniffing) ─────────── */
+function parseGenericCSV(content: string, acct = 'Importado', sep = ','): Txn[] {
+  const lines = cleanLines(content).filter(l => l.trim());
   if (lines.length < 2) return [];
-  // Find date column: first col that looks like a date
   const txns: Txn[] = [];
   for (let i = 1; i < lines.length; i++) {
-    const cols = parseCSVLine(lines[i]);
-    // Try to find date (DD/MM/YYYY or YYYY-MM-DD) and amount
-    let d = '', merch = '', amtRaw = 0;
+    const cols = splitLine(lines[i], sep);
+    let d = '', merch = '', amtRaw = NaN;
     for (const col of cols) {
-      if (!d && /^\d{2}\/\d{2}\/\d{4}$/.test(col)) {
-        const p = col.split('/');
+      const c = col.trim();
+      if (!d && /^\d{2}\/\d{2}\/\d{4}$/.test(c)) {
+        const p = c.split('/');
         d = `${p[2]}-${p[1]}-${p[0]}`;
-      } else if (!d && /^\d{4}-\d{2}-\d{2}$/.test(col)) {
-        d = col;
-      } else if (!amtRaw) {
-        const n = parseFloat(col.replace(/\./g, '').replace(',', '.'));
+      } else if (!d && /^\d{4}-\d{2}-\d{2}$/.test(c)) {
+        d = c;
+      } else if (isNaN(amtRaw)) {
+        const n = parseBRLNum(c);
         if (!isNaN(n) && Math.abs(n) > 0.01) amtRaw = n;
-      } else if (!merch && col.length > 2 && !/^\d/.test(col)) {
-        merch = col;
+      } else if (!merch && c.length > 2 && !/^\d/.test(c)) {
+        merch = c;
       }
     }
-    if (!d || !amtRaw) continue;
+    if (!d || isNaN(amtRaw)) continue;
     const { cat, sub } = catFor(merch, amtRaw);
     txns.push({ id: newId(), d, merch: merch || 'Desconhecido', cat, sub, acct, amt: amtRaw });
   }
@@ -581,13 +665,17 @@ function parseGenericCSV(content: string, acct = 'Importado'): Txn[] {
 }
 
 /* ── Route file to parser ────────────────────────────────────────── */
-function parseFile(content: string, filename: string, acct?: string): Txn[] {
-  const fmt = detectFormat(content, filename);
+function parseFile(content: string, filename: string, acct?: string): { txns: Txn[]; fmt: CsvFormat; rawHeader: string } {
+  const { fmt, sep, headerIdx } = detectFormat(content, filename);
+  const lines = cleanLines(content);
+  const rawHeader = lines[headerIdx] ?? lines[0] ?? '';
   const name = acct || (fmt === 'c6' ? 'C6 Bank' : fmt === 'nubank' ? 'Nubank' : 'Importado');
-  if (fmt === 'nubank') return parseNubankCSV(content, name);
-  if (fmt === 'ofx') return parseOFX(content, name);
-  if (fmt === 'c6') return parseC6CSV(content, name);
-  return parseGenericCSV(content, name);
+  let txns: Txn[];
+  if (fmt === 'nubank') txns = parseNubankCSV(content, name, sep, headerIdx);
+  else if (fmt === 'ofx') txns = parseOFX(content, name);
+  else if (fmt === 'c6') txns = parseC6CSV(content, name, sep, headerIdx);
+  else txns = parseGenericCSV(content, name, sep);
+  return { txns, fmt, rawHeader };
 }
 
 export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportComplete?: (txns: Txn[], mode: 'merge' | 'replace') => void }) {
@@ -618,25 +706,33 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
     const timer = setTimeout(() => {
       let newLogs: string[] = [];
       if (pipeStep === 1) {
-        const fmt = detectFormat(rawContent, fileName);
+        const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
         setDetectedFmt(fmt);
         const fmtLabel: Record<CsvFormat, string> = { c6: 'C6 Bank CSV', nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV', ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV' };
+        const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
         newLogs = pt
-          ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `✓ Codificação: UTF-8`]
-          : [`✓ Format detected: ${fmtLabel[fmt]}`, `✓ Encoding: UTF-8`];
+          ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
+          : [`✓ Format detected: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`];
       } else if (pipeStep === 2) {
-        const rows = rawContent.split('\n').filter(l => l.trim() && (/^\d{2}\/\d{2}\/\d{4}/.test(l.trim()) || /^\d{4}-\d{2}-\d{2}/.test(l.trim()) || /<STMTTRN>/i.test(l))).length || rawContent.split('\n').filter(l => l.trim()).length - 1;
+        const nonEmpty = cleanLines(rawContent).filter(l => l.trim()).length;
+        const dataRows = Math.max(0, nonEmpty - 1);
         newLogs = pt
-          ? [`✓ ${Math.max(rows, 0)} linhas de dados encontradas`, `✓ Iniciando categorização inteligente`]
-          : [`✓ ${Math.max(rows, 0)} data rows found`, `✓ Starting smart categorization`];
+          ? [`✓ ${dataRows} linhas de dados encontradas`, `✓ Iniciando categorização inteligente`]
+          : [`✓ ${dataRows} data rows found`, `✓ Starting smart categorization`];
       } else if (pipeStep === 3) {
-        const result = parseFile(rawContent, fileName, acctName || undefined);
+        const { txns: result } = parseFile(rawContent, fileName, acctName || undefined);
         setParsedTxns(result);
-        const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
-        const categorized = result.length - uncategorized;
-        newLogs = pt
-          ? [`✓ ${result.length} transações extraídas`, `✓ ${categorized} categorizadas automaticamente`, uncategorized > 0 ? `○ ${uncategorized} com categoria genérica (revise)` : `✓ Todas categorizadas com sucesso`]
-          : [`✓ ${result.length} transactions extracted`, `✓ ${categorized} auto-categorized`, uncategorized > 0 ? `○ ${uncategorized} with generic category (review)` : `✓ All categorized successfully`];
+        if (result.length === 0) {
+          newLogs = pt
+            ? [`✗ Nenhuma transação encontrada`, `  Verifique se o arquivo é um CSV válido do C6 ou Nubank`]
+            : [`✗ No transactions found`, `  Check that the file is a valid C6 or Nubank CSV`];
+        } else {
+          const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
+          const categorized = result.length - uncategorized;
+          newLogs = pt
+            ? [`✓ ${result.length} transações extraídas`, `✓ ${categorized} categorizadas automaticamente`, uncategorized > 0 ? `○ ${uncategorized} com categoria genérica` : `✓ Todas categorizadas com sucesso`]
+            : [`✓ ${result.length} transactions extracted`, `✓ ${categorized} auto-categorized`, uncategorized > 0 ? `○ ${uncategorized} with generic category` : `✓ All categorized successfully`];
+        }
       }
       setLogs(prev => [...prev, ...newLogs]);
       setPipeStep(s => s + 1);
