@@ -630,6 +630,7 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
       reimbursable: reimbStage === 'pending' || undefined,
       reimburseReceived: reimbStage === 'received' || undefined,
       reimbAmt: reimbStage !== 'none' && !isNaN(reimbAmt_) && reimbAmt_ > 0 ? reimbAmt_ : undefined,
+      source: undefined, // clear paste/ocr tag — user manually saved this
     });
     onClose();
   }

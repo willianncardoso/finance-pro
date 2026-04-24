@@ -724,7 +724,7 @@ function parseBRLNum(s: string): number {
 }
 
 /* ── Format detection ───────────────────────────────────────────── */
-type CsvFormat = 'c6' | 'c6fatura' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic' | 'numbers';
+type CsvFormat = 'c6' | 'c6fatura' | 'c6paste' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic' | 'numbers';
 
 function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep: string; headerIdx: number } {
   // Apple Numbers / ZIP format (binary) — cannot parse as CSV
@@ -1125,7 +1125,7 @@ function parseC6AppText(text: string, acct = 'C6 Bank'): Txn[] {
         if (!isNaN(amtRaw) && amtRaw !== 0) {
           const amt = -amtRaw; // C6 app shows positive amounts; outflows become negative
           const { cat, sub } = catFor(`${pendingMerch} ${pendingCat}`, amt);
-          results.push({ id: newId(), d: currentDate, merch: pendingMerch, cat, sub, acct, amt, kind: 'card' });
+          results.push({ id: newId(), d: currentDate, merch: pendingMerch, cat, sub, acct, amt, kind: 'card', source: 'paste' });
           pendingMerch = '';
         }
       }
@@ -1167,7 +1167,7 @@ function parseFile(content: string, filename: string, acct?: string): { txns: Tx
   return { txns, fmt, rawHeader };
 }
 
-export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: Lang; onImportComplete?: (txns: Txn[], mode: 'merge' | 'replace') => void; onDeleteBatch?: (txnIds: string[]) => void }) {
+export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAccts = [] }: { lang: Lang; onImportComplete?: (txns: Txn[], mode: 'merge' | 'replace') => void; onDeleteBatch?: (txnIds: string[]) => void; existingAccts?: string[] }) {
   const t = I18N[lang];
   const pt = lang === 'pt';
   const [drag, setDrag] = useState(false);
@@ -1254,7 +1254,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
             newLogs = [];
             const result = parseC6AppText(pasteText, acctName || 'C6 Bank');
             setParsedTxns(result);
-            setDetectedFmt('c6fatura');
+            setDetectedFmt('c6paste');
             if (result.length === 0) {
               newLogs = [pt ? '✗ Nenhuma transação encontrada. Verifique o formato do texto.' : '✗ No transactions found. Check the text format.'];
             } else {
@@ -1274,7 +1274,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
           const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
           setDetectedFmt(fmt);
           const fmtLabel: Record<CsvFormat, string> = {
-            c6: 'C6 Bank Extrato CSV', c6fatura: 'C6 Bank Fatura CSV',
+            c6: 'C6 Bank Extrato CSV', c6fatura: 'C6 Bank Fatura CSV', c6paste: pt ? 'C6 Texto colado' : 'C6 Pasted text',
             nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV',
             ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
           };
@@ -1396,7 +1396,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
     if (pipeStep !== 4) return;
     setPipeStep(5);
     const count = parsedTxns.length;
-    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', c6fatura: 'C6 Fatura', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', generic: pt ? 'Genérico' : 'Generic', numbers: 'Numbers' };
+    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', c6fatura: 'C6 Fatura', c6paste: pt ? 'C6 Texto colado' : 'C6 Pasted', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', generic: pt ? 'Genérico' : 'Generic', numbers: 'Numbers' };
     setTimeout(() => {
       setLogs(prev => [...prev, ...(pt
         ? [`Mesclando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
@@ -1487,6 +1487,28 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
             </div>
           ) : isPasteMode && !isProcessing ? (
             <div>
+              {/* Card selector */}
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 12, color: 'var(--ink-3)', display: 'block', marginBottom: 4 }}>
+                  {pt ? 'Cartão / conta (selecione ou digite):' : 'Card / account (select or type):'}
+                </label>
+                <input
+                  list="paste-accts-list"
+                  value={acctName}
+                  onChange={e => setAcctName(e.target.value)}
+                  placeholder={pt ? 'Ex: C6 Bank •4321' : 'e.g. C6 Bank •4321'}
+                  className="field"
+                  style={{ width: '100%', fontSize: 13, boxSizing: 'border-box' }}
+                />
+                <datalist id="paste-accts-list">
+                  {existingAccts.map(a => <option key={a} value={a} />)}
+                </datalist>
+                {existingAccts.length > 0 && (
+                  <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 3 }}>
+                    {pt ? 'Selecione o cartão existente para que a fatura CSV posterior possa substituir corretamente estas transações.' : 'Select the existing card so the later CSV invoice can correctly supersede these transactions.'}
+                  </div>
+                )}
+              </div>
               <textarea
                 value={pasteText}
                 onChange={e => setPasteText(e.target.value)}
@@ -1498,7 +1520,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
               <button
                 className="btn primary"
                 style={{ marginTop: 8, width: '100%' }}
-                disabled={!pasteText.trim()}
+                disabled={!pasteText.trim() || !acctName.trim()}
                 onClick={() => {
                   setFileName(pt ? 'fatura-c6-colada.txt' : 'c6-pasted.txt');
                   setLogs([pt ? `✓ Processando texto colado…` : `✓ Processing pasted text…`]);
@@ -1511,8 +1533,8 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
               </button>
               <div style={{ marginTop: 8, fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.6 }}>
                 {pt
-                  ? 'Copie o extrato diretamente do app C6. Funciona com faturas abertas que ainda não foram exportadas como CSV.'
-                  : 'Copy statement text directly from the C6 app. Works with open invoices not yet available as CSV.'}
+                  ? 'Transações marcadas como "colado". Ao importar o CSV oficial depois, as não editadas serão substituídas automaticamente.'
+                  : 'Transactions tagged as "pasted". When you import the official CSV later, unedited ones are replaced automatically.'}
               </div>
             </div>
           ) : (
