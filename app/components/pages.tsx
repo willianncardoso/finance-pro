@@ -424,7 +424,11 @@ function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolea
             {I18N[lang].categories[tx.cat] ?? tx.cat}
           </span>
           {showAcct && <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{tx.acct}</span>}
-          {tx.installment && <span style={{ fontSize: 10, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>{tx.installment}</span>}
+          {tx.installment && (
+            <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 600, fontFamily: 'var(--font-mono)', background: 'var(--accent)18', borderRadius: 4, padding: '1px 5px' }}>
+              {pt ? 'parc' : 'inst'} {tx.installment}
+            </span>
+          )}
         </div>
       </div>
       <div className={'num' + (tx.amt > 0 ? ' pos' : '')} style={{ fontWeight: 700, fontSize: 14, flexShrink: 0, color: tx.amt > 0 ? 'var(--pos)' : 'var(--ink)' }}>
@@ -701,6 +705,39 @@ function c6Merchant(titulo: string, desc: string): string {
   return d;
 }
 
+/* ── Installment helpers ────────────────────────────────────────── */
+
+// Returns YYYY-MM of the most-represented month in the txn list
+function computeStatementMonth(txns: { d: string }[]): string {
+  const counts: Record<string, number> = {};
+  for (const tx of txns) {
+    const m = tx.d.slice(0, 7);
+    counts[m] = (counts[m] ?? 0) + 1;
+  }
+  const entries = Object.entries(counts);
+  if (!entries.length) return '';
+  return entries.sort((a, b) => b[1] - a[1])[0][0];
+}
+
+// Extract "N/T" installment label from a description string and return cleaned merchant + label
+function extractInstallment(text: string): { merch: string; installment: string | null } {
+  // Matches "2/12", "02/12", "03/36" anywhere in the string
+  const m = text.match(/\b(\d{1,2})\/(\d{2,3})\b/);
+  if (!m) return { merch: text.trim(), installment: null };
+  const label = `${parseInt(m[1], 10)}/${parseInt(m[2], 10)}`;
+  const cleaned = text.slice(0, m.index).replace(/[\s\-–/]+$/, '').trim() ||
+                  text.slice(m.index! + m[0].length).trim();
+  return { merch: cleaned || text.trim(), installment: label };
+}
+
+// Clamp date day to last valid day of month (e.g. "2026-02-30" → "2026-02-28")
+function clampToMonth(ym: string, day: string): string {
+  const d = new Date(`${ym}-${day}T12:00:00`);
+  if (!isNaN(d.getTime())) return `${ym}-${day}`;
+  const last = new Date(parseInt(ym.slice(0, 4)), parseInt(ym.slice(5, 7)), 0);
+  return last.toISOString().slice(0, 10);
+}
+
 function parseC6CSV(content: string, acct = 'C6 Bank', sep = ',', hIdx = -1): Txn[] {
   const lines = cleanLines(content);
   // Find header row: contains both "entrada" and "saída/saida"
@@ -761,7 +798,7 @@ function parseNubankCSV(content: string, acct = 'Nubank', sep = ',', hIdx = -1):
   const iTitle = idxOf('title') >= 0 ? idxOf('title') : idxOf('titulo') >= 0 ? idxOf('titulo') : 2;
   const iAmt = idxOf('amount') >= 0 ? idxOf('amount') : idxOf('valor') >= 0 ? idxOf('valor') : 2;
 
-  const txns: Txn[] = [];
+  const raw_txns: Txn[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const cols = splitLine(lines[i], sep);
     if (cols.length < 3) continue;
@@ -772,9 +809,18 @@ function parseNubankCSV(content: string, acct = 'Nubank', sep = ',', hIdx = -1):
     if (isNaN(raw)) continue;
     // Nubank credit card: positive = expense, negative = credit/refund
     const amt = -raw;
+    const { merch, installment } = extractInstallment(titulo);
     const { cat, sub } = catFor(titulo, amt);
-    txns.push({ id: newId(), d: dateStr, merch: titulo, cat, sub, acct, amt, kind: 'card' });
+    raw_txns.push({ id: newId(), d: dateStr, merch, cat, sub, acct, amt, installment, kind: 'card' });
   }
+  // Redate installments: Nubank CSVs already use billing date, but guard anyway
+  const stmtMonth = computeStatementMonth(raw_txns);
+  const txns = stmtMonth
+    ? raw_txns.map(tx => {
+        if (!tx.installment || tx.d.startsWith(stmtMonth)) return tx;
+        return { ...tx, d: clampToMonth(stmtMonth, tx.d.slice(8, 10)) };
+      })
+    : raw_txns;
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
 
@@ -807,7 +853,7 @@ function parseC6FaturaCSV(content: string, acct = 'C6 Bank', sep = ';', hIdx = -
   const cardLast4 = colFinal >= 0 ? firstData[colFinal]?.trim() : '';
   const resolvedAcct = cardLast4 ? `${acct} •${cardLast4}` : acct;
 
-  const txns: Txn[] = [];
+  const raw_txns: Txn[] = [];
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
@@ -822,18 +868,41 @@ function parseC6FaturaCSV(content: string, acct = 'C6 Bank', sep = ';', hIdx = -
 
     const descricao = cols[colDesc >= 0 ? colDesc : 4]?.trim() ?? '';
     const categoria = cols[colCat >= 0 ? colCat : 3]?.trim() ?? '';
-    const parcela   = cols[colParc >= 0 ? colParc : 5]?.trim() ?? '';
+    // Explicit parcela column (some C6 exports have it)
+    const parcelaCol = colParc >= 0 ? (cols[colParc]?.trim() ?? '') : '';
     const raw = parseBRLNum(cols[colValor] ?? '');
     if (isNaN(raw) || raw === 0) continue;
 
     // C6 Fatura: positive = expense → negate to app convention (expense = negative)
     const amt = -raw;
-    const label = parcela && parcela !== 'Única' && parcela !== 'Unica'
-      ? `${descricao} (${parcela})`
-      : descricao;
+
+    // Extract installment: prefer explicit column, else parse from description
+    let installment: string | null = null;
+    let cleanMerch = descricao;
+
+    if (parcelaCol && parcelaCol !== 'Única' && parcelaCol !== 'Unica') {
+      // Explicit column: "3/12", "3 de 12", etc.
+      const pm = parcelaCol.match(/(\d+)\s*(?:de|\/)\s*(\d+)/i);
+      installment = pm ? `${parseInt(pm[1], 10)}/${parseInt(pm[2], 10)}` : parcelaCol;
+    } else {
+      // Embedded in description: "LOJA 03/12" or "LOJA PARC 3/12"
+      const ex = extractInstallment(descricao);
+      installment = ex.installment;
+      cleanMerch = ex.merch;
+    }
+
     const { cat, sub } = catFor(`${descricao} ${categoria}`, amt);
-    txns.push({ id: newId(), d, merch: label || descricao || 'C6', cat, sub, acct: resolvedAcct, amt, kind: 'card' });
+    raw_txns.push({ id: newId(), d, merch: cleanMerch || descricao || 'C6', cat, sub, acct: resolvedAcct, amt, installment, kind: 'card' });
   }
+
+  // Redate installments to statement month so April faturas show April dates
+  const stmtMonth = computeStatementMonth(raw_txns);
+  const txns = stmtMonth
+    ? raw_txns.map(tx => {
+        if (!tx.installment || tx.d.startsWith(stmtMonth)) return tx;
+        return { ...tx, d: clampToMonth(stmtMonth, tx.d.slice(8, 10)) };
+      })
+    : raw_txns;
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
 
