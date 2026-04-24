@@ -9,7 +9,7 @@ import {
 } from "./components/pages";
 import { EditDrawer, Toast, ProjectionPage, RecurringPage, VaultPage } from "./components/edit-drawer";
 import { ModalRenderer, ModalState } from "./components/modals";
-import { Txn, newId } from "./lib/data";
+import { Txn, newId, AppNotification, CardMeta } from "./lib/data";
 
 declare global {
   interface Window {
@@ -110,6 +110,8 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [txns, setTxns] = useState<Txn[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [cardMeta, setCardMeta] = useState<CardMeta>({});
 
   // File handle is a ref — changing it doesn't need a re-render
   const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
@@ -126,6 +128,14 @@ export default function Home() {
         setTxns(parsed.map(t => t.id ? t : { ...t, id: newId() }));
       }
     } catch {}
+    try {
+      const meta = localStorage.getItem("fp_card_meta");
+      if (meta) setCardMeta(JSON.parse(meta));
+    } catch {}
+    try {
+      const notifs = localStorage.getItem("fp_notifications");
+      if (notifs) setNotifications(JSON.parse(notifs));
+    } catch {}
     setHydrated(true);
   }, []);
 
@@ -134,6 +144,35 @@ export default function Home() {
     localStorage.setItem("fp_txns", JSON.stringify(txns));
     window.dispatchEvent(new CustomEvent("fp:autosave"));
   }, [txns, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    localStorage.setItem("fp_card_meta", JSON.stringify(cardMeta));
+  }, [cardMeta, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    localStorage.setItem("fp_notifications", JSON.stringify(notifications.slice(0, 80)));
+  }, [notifications, hydrated]);
+
+  // Due-date reminders: fire once after hydration when cardMeta has due days
+  useEffect(() => {
+    if (!hydrated) return;
+    const today = new Date();
+    const todayDay = today.getDate();
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    Object.entries(cardMeta).forEach(([acct, meta]) => {
+      if (!meta.dueDay) return;
+      const diff = ((meta.dueDay - todayDay + daysInMonth) % daysInMonth);
+      const label = state.lang === "pt"
+        ? diff === 0 ? `Fatura ${acct} vence hoje!` : `Fatura ${acct} vence em ${diff} dia${diff > 1 ? "s" : ""}`
+        : diff === 0 ? `${acct} bill due today!` : `${acct} bill due in ${diff} day${diff > 1 ? "s" : ""}`;
+      if (diff <= 4) {
+        addNotification(label, diff === 0 ? "danger" : "warn");
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -165,8 +204,10 @@ export default function Home() {
     window.__openTxnEdit = (txn: Txn) => setEditTxn(txn);
     (window as any).__navigate = navigate;
 
-    (window as any).__toast = (message: string, kind: "success" | "warn" | "danger" = "success") =>
+    (window as any).__toast = (message: string, kind: "success" | "warn" | "danger" = "success") => {
       setToast({ message, kind });
+      addNotification(message, kind);
+    };
 
     (window as any).__modal = (type: string, data: Record<string, unknown> = {}) =>
       setModal({ type, data });
@@ -236,6 +277,11 @@ export default function Home() {
     };
   }, [txns, state]);
 
+  function addNotification(message: string, kind: AppNotification["kind"] = "info") {
+    const notif: AppNotification = { id: newId(), message, kind, timestamp: new Date().toISOString(), read: false };
+    setNotifications(prev => [notif, ...prev].slice(0, 80));
+  }
+
   function updateState(patch: Partial<AppState>) {
     setState(prev => ({ ...prev, ...patch }));
   }
@@ -299,6 +345,9 @@ export default function Home() {
         setPrivacy={p => updateState({ privacy: p })}
         setRoute={navigate}
         onNewTxn={() => setModal({ type: "newtxn", data: {} })}
+        notifications={notifications}
+        onMarkRead={() => setNotifications(prev => prev.map(n => ({ ...n, read: true })))}
+        onClearNotifications={() => setNotifications([])}
       />
 
       <main className="main">
@@ -308,7 +357,14 @@ export default function Home() {
         {route === "accounts" && (
           <AccountsPage lang={state.lang} onEditTxn={setEditTxn} txns={txns} />
         )}
-        {route === "cards" && <CardsPage lang={state.lang} txns={txns} />}
+        {route === "cards" && (
+          <CardsPage
+            lang={state.lang}
+            txns={txns}
+            cardMeta={cardMeta}
+            onUpdateCardMeta={(acct, meta) => setCardMeta(prev => ({ ...prev, [acct]: { ...prev[acct], ...meta } }))}
+          />
+        )}
         {route === "invest" && <InvestPage lang={state.lang} txns={txns} />}
         {route === "import" && <ImportPage lang={state.lang} onImportComplete={(txns, mode) => handleImportComplete(txns, mode)} onDeleteBatch={handleDeleteBatch} />}
         {route === "insights" && <InsightsPage lang={state.lang} txns={txns} />}

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Icon } from "./icons";
-import { I18N, Lang, Insight } from "../lib/data";
+import { I18N, Lang, Insight, AppNotification } from "../lib/data";
 
 type Route = string;
 
@@ -93,10 +93,17 @@ interface TopbarProps {
   setPrivacy: (p: boolean) => void;
   setRoute: (r: Route) => void;
   onNewTxn?: () => void;
+  notifications?: AppNotification[];
+  onMarkRead?: () => void;
+  onClearNotifications?: () => void;
 }
-export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn }: TopbarProps) {
+export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn, notifications = [], onMarkRead, onClearNotifications }: TopbarProps) {
   const t = I18N[lang];
+  const pt = lang === "pt";
   const [savedFlash, setSavedFlash] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const bellRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -109,6 +116,35 @@ export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn 
     return () => { window.removeEventListener("fp:autosave", h); clearTimeout(timer); };
   }, []);
 
+  // Close panel on outside click
+  useEffect(() => {
+    if (!notifOpen) return;
+    const h = (e: MouseEvent) => {
+      if (!bellRef.current?.contains(e.target as Node) && !panelRef.current?.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [notifOpen]);
+
+  const unread = notifications.filter(n => !n.read).length;
+
+  function relTime(iso: string) {
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return pt ? "agora" : "now";
+    if (m < 60) return pt ? `${m}min atrás` : `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return pt ? `${h}h atrás` : `${h}h ago`;
+    return pt ? `${Math.floor(h / 24)}d atrás` : `${Math.floor(h / 24)}d ago`;
+  }
+
+  const kindColor: Record<string, string> = {
+    success: "var(--pos)", warn: "var(--warn, #f59e0b)", danger: "var(--danger)", info: "var(--accent)",
+  };
+  const kindIcon: Record<string, string> = { success: "check", warn: "alert", danger: "alert", info: "sparkle" };
+
   return (
     <header className="topbar">
       <div className="search" style={{ cursor: "pointer" }} onClick={() => (window as any).__modal?.("cmdpalette", {})}>
@@ -118,27 +154,94 @@ export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn 
       </div>
       <div className="topbar-actions">
         {savedFlash && (
-          <span style={{
-            fontSize: 11, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 4,
-            opacity: savedFlash ? 1 : 0, transition: "opacity 0.4s",
-          }}>
+          <span style={{ fontSize: 11, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 4 }}>
             <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M13 4L6 11l-3-3" />
             </svg>
-            {lang === "pt" ? "Salvo" : "Saved"}
+            {pt ? "Salvo" : "Saved"}
           </span>
         )}
         <div className="seg" style={{ marginRight: 6 }}>
           <button className={lang === "pt" ? "on" : ""} onClick={() => setLang("pt")}>PT</button>
           <button className={lang === "en" ? "on" : ""} onClick={() => setLang("en")}>EN</button>
         </div>
-        <button className="icon-btn" onClick={() => setPrivacy(!privacy)} title={lang === "pt" ? "Privacidade" : "Privacy"}>
+        <button className="icon-btn" onClick={() => setPrivacy(!privacy)} title={pt ? "Privacidade" : "Privacy"}>
           <Icon name={privacy ? "eye_off" : "eye"} style={{ width: 15, height: 15 }} className="" />
         </button>
-        <button className="icon-btn" onClick={() => setRoute("insights")} title={lang === "pt" ? "Alertas" : "Alerts"}>
-          <Icon name="bell" style={{ width: 15, height: 15 }} className="" />
-          <span className="dot"></span>
-        </button>
+
+        {/* ── Notification bell ── */}
+        <div style={{ position: "relative" }}>
+          <button
+            ref={bellRef}
+            className="icon-btn"
+            style={{ position: "relative" }}
+            title={pt ? "Notificações" : "Notifications"}
+            onClick={() => { setNotifOpen(o => !o); if (!notifOpen) onMarkRead?.(); }}
+          >
+            <Icon name="bell" style={{ width: 15, height: 15 }} className="" />
+            {unread > 0 && (
+              <span style={{
+                position: "absolute", top: 0, right: 0,
+                fontSize: 9, fontWeight: 700, background: "var(--danger)", color: "#fff",
+                borderRadius: 99, minWidth: 14, height: 14, lineHeight: "14px",
+                display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
+                transform: "translate(30%, -30%)", pointerEvents: "none",
+              }}>{unread > 9 ? "9+" : unread}</span>
+            )}
+          </button>
+
+          {notifOpen && (
+            <div ref={panelRef} style={{
+              position: "absolute", top: "calc(100% + 8px)", right: 0,
+              width: 320, background: "var(--surface)", border: "1px solid var(--border)",
+              borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.18)", zIndex: 300, overflow: "hidden",
+            }}>
+              {/* Panel header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{pt ? "Notificações" : "Notifications"}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {notifications.length > 0 && (
+                    <button className="btn ghost sm" style={{ fontSize: 11, padding: "2px 8px" }}
+                      onClick={() => { onClearNotifications?.(); setNotifOpen(false); }}>
+                      {pt ? "Limpar" : "Clear"}
+                    </button>
+                  )}
+                  <button className="icon-btn" style={{ width: 22, height: 22, fontSize: 16 }} onClick={() => setNotifOpen(false)}>×</button>
+                </div>
+              </div>
+
+              {/* Notification list */}
+              {notifications.length === 0 ? (
+                <div style={{ padding: "32px 16px", textAlign: "center", color: "var(--ink-3)", fontSize: 12 }}>
+                  <Icon name="bell" style={{ width: 28, height: 28, stroke: "var(--ink-4)", marginBottom: 8 }} className="" />
+                  <div>{pt ? "Nenhuma notificação" : "No notifications"}</div>
+                </div>
+              ) : (
+                <div style={{ maxHeight: 360, overflowY: "auto" }}>
+                  {notifications.map((n, i) => (
+                    <div key={n.id} style={{
+                      display: "flex", gap: 12, padding: "11px 16px",
+                      borderBottom: i < notifications.length - 1 ? "1px solid var(--border)" : "none",
+                      background: n.read ? "transparent" : kindColor[n.kind] + "08",
+                    }}>
+                      <div style={{ flexShrink: 0, marginTop: 1, color: kindColor[n.kind] }}>
+                        <Icon name={kindIcon[n.kind]} style={{ width: 14, height: 14 }} className="" />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, lineHeight: 1.45 }}>{n.message}</div>
+                        <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 3 }}>{relTime(n.timestamp)}</div>
+                      </div>
+                      {!n.read && (
+                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: kindColor[n.kind], flexShrink: 0, marginTop: 4 }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <button className="btn sm" onClick={() => setRoute("import")}>
           <Icon name="upload" className="btn-icon" />
           <span>{t.import_doc}</span>

@@ -267,6 +267,8 @@ export interface PortfolioItem { t: string; q: number; pm: number; last: number;
 export interface Goal { key: string; target: number; current: number; when: string; }
 export interface Upcoming { d: string; merch: string; cat: string; amt: number; warn?: boolean; }
 export interface RecurringItem { name: string; cat: string; sub: string; amt: number; day: number; acct: string; next: string; kind: string; until?: string; }
+export interface AppNotification { id: string; message: string; kind: 'success' | 'warn' | 'danger' | 'info'; timestamp: string; read: boolean; }
+export type CardMeta = Record<string, { dueDay?: number }>;
 export interface InstallmentItem { name: string; cat: string; sub: string; amt: number; start: string; total: number; current: number; acct: string; }
 
 /* ===== Mock data ===== */

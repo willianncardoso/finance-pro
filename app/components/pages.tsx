@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Icon } from "./icons";
-import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, PERIOD_PRESETS, PeriodPreset, newId } from "../lib/data";
+import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, PERIOD_PRESETS, PeriodPreset, newId, CardMeta } from "../lib/data";
 
 /* ─── Helpers that derive stats from real transaction data ─── */
 
@@ -93,7 +93,11 @@ function cardAccent(acct: string): string {
   return 'var(--accent)';
 }
 
-export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
+export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: {
+  lang: Lang; txns?: Txn[];
+  cardMeta?: CardMeta;
+  onUpdateCardMeta?: (acct: string, meta: { dueDay?: number }) => void;
+}) {
   const t = I18N[lang];
   const pt = lang === 'pt';
 
@@ -106,6 +110,8 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
   const [selCat, setSelCat] = useState('');
+  const [editDueAcct, setEditDueAcct] = useState<string | null>(null);
+  const [dueInputVal, setDueInputVal] = useState('');
 
   if (!effective.length) return (
     <div className="page">
@@ -226,10 +232,12 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           const active = selAcct === a.name;
           const isDark = accent === '#1a1a1a' || accent === '#000';
           const bg = active ? (isDark ? '#2a2a2a' : accent) : 'var(--surface)';
+          const dueDay = cardMeta[a.name]?.dueDay;
+          const isEditingDue = editDueAcct === a.name;
           return (
             <div key={a.name} role="button" tabIndex={0}
-              onClick={() => setSelAcct(active ? 'all' : a.name)}
-              onKeyDown={e => e.key === 'Enter' && setSelAcct(active ? 'all' : a.name)}
+              onClick={() => { if (!isEditingDue) setSelAcct(active ? 'all' : a.name); }}
+              onKeyDown={e => e.key === 'Enter' && !isEditingDue && setSelAcct(active ? 'all' : a.name)}
               style={{ flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 185,
                 background: bg, border: `1.5px solid ${active ? 'transparent' : 'var(--border)'}`,
                 color: active ? '#fff' : 'var(--ink)', userSelect: 'none',
@@ -247,6 +255,62 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
               <div style={{ display: 'flex', gap: 10, marginTop: 6, opacity: 0.6, fontSize: 11 }}>
                 <span>{a.count} {pt ? 'tx' : 'tx'}</span>
                 {a.refunds > 0 && <span>+{fmtMoney(a.refunds, lang, true)} {pt ? 'est.' : 'ref.'}</span>}
+              </div>
+              {/* Due date editor */}
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{ marginTop: 10, borderTop: `1px solid ${active ? 'rgba(255,255,255,0.15)' : 'var(--border)'}`, paddingTop: 8 }}
+              >
+                {isEditingDue ? (
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <input
+                      autoFocus
+                      type="number"
+                      min={1} max={31}
+                      value={dueInputVal}
+                      onChange={e => setDueInputVal(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          const d = parseInt(dueInputVal, 10);
+                          if (d >= 1 && d <= 31) onUpdateCardMeta?.(a.name, { dueDay: d });
+                          setEditDueAcct(null);
+                        }
+                        if (e.key === 'Escape') setEditDueAcct(null);
+                      }}
+                      placeholder="1-31"
+                      style={{ width: 54, height: 24, fontSize: 12, border: `1px solid ${active ? 'rgba(255,255,255,0.4)' : 'var(--border)'}`,
+                        borderRadius: 6, padding: '0 6px', background: active ? 'rgba(255,255,255,0.12)' : 'var(--bg-2)',
+                        color: active ? '#fff' : 'var(--ink)' }}
+                    />
+                    <button
+                      onClick={() => {
+                        const d = parseInt(dueInputVal, 10);
+                        if (d >= 1 && d <= 31) onUpdateCardMeta?.(a.name, { dueDay: d });
+                        setEditDueAcct(null);
+                      }}
+                      style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, border: 'none', cursor: 'pointer',
+                        background: active ? 'rgba(255,255,255,0.22)' : 'var(--accent)', color: active ? '#fff' : '#fff' }}>
+                      {pt ? 'Ok' : 'Ok'}
+                    </button>
+                    {dueDay && (
+                      <button
+                        onClick={() => { onUpdateCardMeta?.(a.name, { dueDay: undefined }); setEditDueAcct(null); }}
+                        style={{ fontSize: 11, padding: '2px 6px', borderRadius: 5, border: 'none', cursor: 'pointer',
+                          background: 'transparent', color: active ? 'rgba(255,255,255,0.6)' : 'var(--ink-3)' }}>
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setDueInputVal(dueDay ? String(dueDay) : ''); setEditDueAcct(a.name); }}
+                    style={{ fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                      color: active ? (dueDay ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.45)') : (dueDay ? 'var(--ink-2)' : 'var(--ink-3)'),
+                      display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 9 }}>📅</span>
+                    {dueDay ? (pt ? `Vence dia ${dueDay}` : `Due day ${dueDay}`) : (pt ? 'Definir vencimento' : 'Set due date')}
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -412,19 +476,19 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
 
 function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolean; lang: Lang; accent: string; last: boolean }) {
   const pt = lang === 'pt';
-  // Use a neutral tint for the avatar that works in both light and dark mode
+  const excluded = (tx as any).exclude === true;
   const avatarBg = accent === '#1a1a1a' ? 'var(--bg-3)' : accent + '20';
   const avatarColor = accent === '#1a1a1a' ? 'var(--ink-2)' : accent;
   return (
     <div
       onClick={() => (window as any).__openTxnEdit?.(tx)}
-      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: last ? 'none' : '1px solid var(--border)', cursor: 'pointer' }}
+      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: last ? 'none' : '1px solid var(--border)', cursor: 'pointer', opacity: excluded ? 0.5 : 1 }}
     >
       <div style={{ width: 36, height: 36, borderRadius: 10, background: avatarBg, display: 'grid', placeItems: 'center', flexShrink: 0, fontSize: 12, fontWeight: 700, color: avatarColor }}>
         {tx.merch.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '?'}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.merch}</div>
+        <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: excluded ? 'line-through' : 'none', color: excluded ? 'var(--ink-3)' : 'var(--ink)' }}>{tx.merch}</div>
         <div style={{ display: 'flex', gap: 6, marginTop: 3, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="pill" style={{ fontSize: 10 }}>
             <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
@@ -436,9 +500,14 @@ function TxRow({ tx, showAcct, lang, accent, last }: { tx: Txn; showAcct: boolea
               {pt ? 'parc' : 'inst'} {tx.installment}
             </span>
           )}
+          {excluded && (
+            <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-3)', borderRadius: 4, padding: '1px 5px', letterSpacing: '0.03em' }}>
+              {pt ? 'excluído' : 'excluded'}
+            </span>
+          )}
         </div>
       </div>
-      <div className={'num' + (tx.amt > 0 ? ' pos' : '')} style={{ fontWeight: 700, fontSize: 14, flexShrink: 0, color: tx.amt > 0 ? 'var(--pos)' : 'var(--ink)' }}>
+      <div className={'num' + (tx.amt > 0 ? ' pos' : '')} style={{ fontWeight: 700, fontSize: 14, flexShrink: 0, color: tx.amt > 0 ? 'var(--pos)' : excluded ? 'var(--ink-3)' : 'var(--ink)', textDecoration: excluded ? 'line-through' : 'none' }}>
         {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
       </div>
     </div>
