@@ -115,6 +115,9 @@ export default function Home() {
 
   // File handle is a ref — changing it doesn't need a re-render
   const fileHandleRef = useRef<FileSystemFileHandle | null>(null);
+  // Track latest txns without triggering interval re-creation
+  const txnsRef = useRef(txns);
+  useEffect(() => { txnsRef.current = txns; }, [txns]);
 
   const hasData = txns.length > 0;
 
@@ -154,6 +157,23 @@ export default function Home() {
     if (!hydrated) return;
     localStorage.setItem("fp_notifications", JSON.stringify(notifications.slice(0, 80)));
   }, [notifications, hydrated]);
+
+  // Auto-save vault every 5 minutes when a file handle is open and data has changed
+  useEffect(() => {
+    if (!hydrated) return;
+    let hasUnsaved = false;
+    const onAutosave = () => { hasUnsaved = true; };
+    window.addEventListener("fp:autosave", onAutosave);
+    const id = setInterval(async () => {
+      if (!fileHandleRef.current || !hasUnsaved) return;
+      hasUnsaved = false;
+      await (window as any).__vaultSave?.(true); // silent — no "Vault salvo" toast
+      const pt = txnsRef.current.length > 0; // proxy for pt lang check — use stored lang
+      const lang = (() => { try { return JSON.parse(localStorage.getItem("fp_state") ?? "{}").lang ?? "pt"; } catch { return "pt"; } })();
+      (window as any).__toast?.(lang === "pt" ? "💾 Auto-salvo" : "💾 Auto-saved", "success");
+    }, 5 * 60 * 1000); // every 5 minutes
+    return () => { clearInterval(id); window.removeEventListener("fp:autosave", onAutosave); };
+  }, [hydrated]);
 
   // Due-date reminders: fire once after hydration when cardMeta has due days
   useEffect(() => {
@@ -244,28 +264,27 @@ export default function Home() {
     };
 
     // Vault file system
-    (window as any).__vaultSave = async () => {
+    (window as any).__vaultSave = async (silent = false) => {
       const pt = state.lang === "pt";
       const payload = { version: "1.0", exportedAt: new Date().toISOString(), txns, state };
       if (fileHandleRef.current) {
-        // Write to existing handle
         try {
           const writable = await (fileHandleRef.current as any).createWritable();
           await writable.write(JSON.stringify(payload, null, 2));
           await writable.close();
-          (window as any).__toast?.(pt ? "💾 Vault salvo" : "💾 Vault saved");
+          if (!silent) (window as any).__toast?.(pt ? "💾 Vault salvo" : "💾 Vault saved");
         } catch {
           fileHandleRef.current = null;
-          (window as any).__vaultSave();
+          (window as any).__vaultSave(silent);
         }
         return;
       }
+      if (silent) return; // No handle open — don't prompt on auto-save
       const handle = await vaultSaveFile(payload);
       if (handle) {
         fileHandleRef.current = handle;
         (window as any).__toast?.(pt ? "💾 Vault salvo" : "💾 Vault saved");
       } else if (typeof (window as any).showSaveFilePicker !== "function") {
-        // Fallback download succeeded
         (window as any).__toast?.(pt ? "💾 Vault exportado (download)" : "💾 Vault downloaded");
       }
     };
@@ -429,7 +448,7 @@ export default function Home() {
         {route === "budget" && <BudgetPage lang={state.lang} txns={txns} />}
         {route === "categories" && <CategoriesPage lang={state.lang} txns={txns} />}
         {route === "compare" && <ComparisonPage lang={state.lang} txns={txns} />}
-        {route === "projection" && <ProjectionPage lang={state.lang} />}
+        {route === "projection" && <ProjectionPage lang={state.lang} txns={txns} />}
         {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} txns={txns} onEditTxn={t => setEditTxn(t)} />}
         {route === "settings" && <SettingsPage lang={state.lang} />}
         {route === "vault" && <VaultPage lang={state.lang} />}

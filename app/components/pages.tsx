@@ -2097,133 +2097,358 @@ export function InsightsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) 
 }
 
 /* ============ REPORTS ============ */
+function periodCutoff(period: "30d" | "90d" | "12m" | "ytd"): string {
+  const d = new Date();
+  if (period === "30d") d.setDate(d.getDate() - 30);
+  else if (period === "90d") d.setDate(d.getDate() - 90);
+  else if (period === "12m") d.setFullYear(d.getFullYear() - 1);
+  else { d.setMonth(0); d.setDate(1); } // ytd: Jan 1
+  return d.toISOString().slice(0, 10);
+}
+
+function exportCSV(txns: Txn[], lang: Lang) {
+  const header = lang === "pt"
+    ? "Data,Descrição,Categoria,Subcategoria,Conta,Valor"
+    : "Date,Description,Category,Subcategory,Account,Amount";
+  const rows = txns.map(t =>
+    [t.d, `"${t.merch.replace(/"/g, '""')}"`, t.cat, t.sub ?? "", `"${t.acct}"`, t.amt.toFixed(2)].join(",")
+  );
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `finance-pro-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ReportsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
+  const pt = lang === "pt";
   const [period, setPeriod] = useState<"30d" | "90d" | "12m" | "ytd">("90d");
+  const [reportTab, setReportTab] = useState<"overview" | "categories" | "merchants" | "monthly">("overview");
 
   if (!txns.length) {
     return (
       <div className="page">
         <div className="page-head">
-          <div><h1 className="page-title">{t.nav_reports}</h1><div className="page-sub">{lang === "pt" ? "Relatórios customizáveis · exporte em PDF/CSV" : "Custom reports · export as PDF/CSV"}</div></div>
+          <div><h1 className="page-title">{t.nav_reports}</h1></div>
         </div>
-        <EmptyState icon="report" title={lang === "pt" ? "Sem dados para relatório" : "No report data"}
-          sub={lang === "pt" ? "Importe suas transações para visualizar relatórios de fluxo de caixa, gastos por categoria e comparativos mensais." : "Import your transactions to view cashflow reports, category breakdowns, and monthly comparisons."}
-          cta={lang === "pt" ? "Importar transações" : "Import transactions"}
+        <EmptyState icon="report" title={pt ? "Sem dados para relatório" : "No report data"}
+          sub={pt ? "Importe suas transações para visualizar relatórios detalhados." : "Import your transactions to view detailed reports."}
+          cta={pt ? "Importar transações" : "Import transactions"}
           onCta={() => (window as any).__navigate?.("import")} />
       </div>
     );
   }
 
-  const stats = computeStats(txns);
-  const catData = stats.catSummary;
-  const catTotal = catData.reduce((s, c) => s + c.cur, 0);
-  const savingsRate = stats.income > 0 ? (stats.net / stats.income * 100) : 0;
+  // Period-aware filtered set
+  const cutoff = periodCutoff(period);
+  const filtered = txns.filter(t => !t.exclude && t.d >= cutoff);
+  const expenses = filtered.filter(t => t.amt < 0);
+  const incomes = filtered.filter(t => t.amt > 0);
+
+  const totalIncome = incomes.reduce((s, t) => s + t.amt, 0);
+  const totalExpense = Math.abs(expenses.reduce((s, t) => s + t.amt, 0));
+  const net = totalIncome - totalExpense;
+  const savingsRate = totalIncome > 0 ? (net / totalIncome) * 100 : 0;
+
+  // Category breakdown
+  const byCat: Record<string, number> = {};
+  expenses.filter(t => t.cat !== "transfer").forEach(t => {
+    byCat[t.cat] = (byCat[t.cat] ?? 0) + Math.abs(t.amt);
+  });
+  const catBreakdown = Object.entries(byCat).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v);
+  const catTotal = catBreakdown.reduce((s, c) => s + c.v, 0);
+
+  // Sub-category breakdown per category
+  const bySub: Record<string, Record<string, number>> = {};
+  expenses.filter(t => t.sub && t.cat !== "transfer").forEach(t => {
+    if (!bySub[t.cat]) bySub[t.cat] = {};
+    bySub[t.cat][t.sub!] = (bySub[t.cat][t.sub!] ?? 0) + Math.abs(t.amt);
+  });
+
+  // Top merchants
+  const byMerch: Record<string, { total: number; count: number; cat: string }> = {};
+  expenses.filter(t => t.cat !== "transfer").forEach(t => {
+    if (!byMerch[t.merch]) byMerch[t.merch] = { total: 0, count: 0, cat: t.cat };
+    byMerch[t.merch].total += Math.abs(t.amt);
+    byMerch[t.merch].count++;
+  });
+  const topMerchants = Object.entries(byMerch).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.total - a.total).slice(0, 15);
+
+  // Monthly breakdown (last 12 months or period)
+  const monthlyMap: Record<string, { ym: string; income: number; expense: number }> = {};
+  filtered.forEach(t => {
+    const ym = t.d.slice(0, 7);
+    if (!monthlyMap[ym]) monthlyMap[ym] = { ym, income: 0, expense: 0 };
+    if (t.amt > 0) monthlyMap[ym].income += t.amt;
+    else monthlyMap[ym].expense += Math.abs(t.amt);
+  });
+  const monthlyData = Object.values(monthlyMap).sort((a, b) => a.ym.localeCompare(b.ym));
+
+  // Spending by day of week
+  const DAY_NAMES_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  const DAY_NAMES_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const byDow: number[] = [0, 0, 0, 0, 0, 0, 0];
+  expenses.forEach(t => {
+    const dow = new Date(t.d + "T12:00:00").getDay();
+    byDow[dow] += Math.abs(t.amt);
+  });
+  const maxDow = Math.max(...byDow, 1);
+
+  // cashflow data for chart
+  const cashflowForChart = computeStats(txns).cashflow;
+
+  // avg monthly spend
+  const months = monthlyData.length || 1;
+  const avgMonthlySpend = totalExpense / months;
+
+  const periodLabel: Record<string, string> = {
+    "30d": pt ? "últimos 30 dias" : "last 30 days",
+    "90d": pt ? "últimos 90 dias" : "last 90 days",
+    "12m": pt ? "últimos 12 meses" : "last 12 months",
+    "ytd": pt ? "ano até hoje" : "year to date",
+  };
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_reports}</h1>
-          <div className="page-sub">{lang === "pt" ? "Relatórios customizáveis · exporte em PDF/CSV" : "Custom reports · export as PDF/CSV"}</div>
+          <div className="page-sub">{filtered.length} {pt ? "transações ·" : "transactions ·"} {periodLabel[period]}</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <div className="seg">
+          <div className="seg" style={{ fontSize: 12 }}>
             <button className={period === "30d" ? "on" : ""} onClick={() => setPeriod("30d")}>{t.last_30d}</button>
             <button className={period === "90d" ? "on" : ""} onClick={() => setPeriod("90d")}>90d</button>
             <button className={period === "12m" ? "on" : ""} onClick={() => setPeriod("12m")}>{t.last_12m}</button>
             <button className={period === "ytd" ? "on" : ""} onClick={() => setPeriod("ytd")}>{t.ytd}</button>
           </div>
-          <button className="btn sm" onClick={() => (window as any).__modal?.("export", {})}>
-            <Icon name="download" className="btn-icon" />{lang === "pt" ? "Exportar" : "Export"}
+          <button className="btn sm" onClick={() => exportCSV(filtered, lang)}>
+            <Icon name="download" className="btn-icon" />{pt ? "CSV" : "CSV"}
           </button>
         </div>
       </div>
 
+      {/* KPI row — period aware */}
       <div className="grid g-4" style={{ marginBottom: 14 }}>
         {[
-          { l: lang === "pt" ? "Receita" : "Income", v: fmtMoney(stats.income, lang, true), d: { pos: true, text: lang === "pt" ? "este mês" : "this month" }, s: "" },
-          { l: lang === "pt" ? "Gastos" : "Expenses", v: fmtMoney(stats.expense, lang, true), d: { pos: stats.expense <= stats.prevExpense, text: stats.prevExpense > 0 ? `${((stats.expense-stats.prevExpense)/stats.prevExpense*100).toFixed(1)}%` : "—" }, s: "" },
-          { l: lang === "pt" ? "Líquido" : "Net", v: fmtMoney(stats.net, lang, true), d: { pos: stats.net >= 0, text: lang === "pt" ? "este mês" : "this month" }, s: "" },
-          { l: lang === "pt" ? "Taxa de poupança" : "Savings rate", v: stats.income > 0 ? `${savingsRate.toFixed(1)}%` : "—", d: { pos: savingsRate >= 20, text: stats.income > 0 ? (savingsRate >= 20 ? "✓ boa" : "↓ baixa") : "—" }, s: "" },
+          { l: pt ? "Receita" : "Income", v: fmtMoney(totalIncome, lang, true), pos: true },
+          { l: pt ? "Gastos" : "Expenses", v: fmtMoney(totalExpense, lang, true), pos: false },
+          { l: pt ? "Líquido" : "Net", v: (net >= 0 ? "+" : "") + fmtMoney(net, lang, true), pos: net >= 0 },
+          { l: pt ? "Taxa de poupança" : "Savings rate", v: totalIncome > 0 ? `${savingsRate.toFixed(1)}%` : "—", pos: savingsRate >= 20 },
         ].map((k, i) => (
           <div key={i} className="kpi">
             <div className="kpi-label">{k.l}</div>
             <div className="kpi-value">{k.v}</div>
-            <div>
-              <span className={"kpi-delta " + (k.d.pos ? "pos" : "neg")}>
-                <Icon name={k.d.pos ? "arrow_up" : "arrow_down"} style={{ width: 10, height: 10 }} className="" />
-                {k.d.text}
-              </span>
-              <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>{k.s}</span>
-            </div>
           </div>
         ))}
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "1.6fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{lang === "pt" ? "Fluxo de caixa · 12 meses" : "Cash flow · 12 months"}</h3>
+      {/* Report tabs */}
+      <div className="seg" style={{ marginBottom: 14, fontSize: 12 }}>
+        <button className={reportTab === "overview" ? "on" : ""} onClick={() => setReportTab("overview")}>{pt ? "Visão geral" : "Overview"}</button>
+        <button className={reportTab === "categories" ? "on" : ""} onClick={() => setReportTab("categories")}>{pt ? "Categorias" : "Categories"}</button>
+        <button className={reportTab === "merchants" ? "on" : ""} onClick={() => setReportTab("merchants")}>{pt ? "Estabelecimentos" : "Merchants"}</button>
+        <button className={reportTab === "monthly" ? "on" : ""} onClick={() => setReportTab("monthly")}>{pt ? "Mensal" : "Monthly"}</button>
+      </div>
+
+      {reportTab === "overview" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Cashflow chart */}
+          <div className="card">
+            <div className="card-head"><h3 className="card-title">{pt ? "Fluxo de caixa · histórico" : "Cash flow · history"}</h3></div>
+            <div className="card-pad">
+              <CashflowChart data={cashflowForChart} lang={lang} showAnnotations={false} />
+            </div>
           </div>
-          <div className="card-pad">
-            <CashflowChart data={stats.cashflow} lang={lang} showAnnotations={false} />
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-head">
-            <h3 className="card-title">{lang === "pt" ? "Distribuição por categoria" : "Category distribution"}</h3>
-          </div>
-          <div className="card-pad" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <DonutChart data={catData.slice(0, 8).map(c => ({ v: c.cur, color: CAT_COLORS[c.k] ?? "var(--ink-3)" }))} size={150} />
-            <div style={{ flex: 1 }}>
-              {catData.slice(0, 6).map(c => (
-                <div key={c.k} style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 0", fontSize: 11.5 }}>
-                  <span style={{ width: 7, height: 7, background: CAT_COLORS[c.k] ?? "var(--ink-3)", borderRadius: 2 }} />
-                  <span>{I18N[lang].categories[c.k] ?? c.k}</span>
-                  <span className="num muted" style={{ marginLeft: "auto" }}>{catTotal > 0 ? (c.cur / catTotal * 100).toFixed(1) : "0"}%</span>
+
+          <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {/* Category donut */}
+            <div className="card">
+              <div className="card-head"><h3 className="card-title">{pt ? "Por categoria" : "By category"}</h3></div>
+              <div className="card-pad" style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <DonutChart data={catBreakdown.slice(0, 8).map(c => ({ v: c.v, color: CAT_COLORS[c.k] ?? "var(--ink-3)" }))} size={130} />
+                <div style={{ flex: 1 }}>
+                  {catBreakdown.slice(0, 7).map(c => (
+                    <div key={c.k} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 0", fontSize: 11 }}>
+                      <span style={{ width: 7, height: 7, background: CAT_COLORS[c.k] ?? "var(--ink-3)", borderRadius: 2, flexShrink: 0 }} />
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{I18N[lang].categories[c.k] ?? c.k}</span>
+                      <span className="num muted">{catTotal > 0 ? (c.v / catTotal * 100).toFixed(0) : 0}%</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+            </div>
+
+            {/* Day of week */}
+            <div className="card">
+              <div className="card-head"><h3 className="card-title">{pt ? "Gastos por dia da semana" : "Spending by weekday"}</h3></div>
+              <div className="card-pad">
+                <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 80 }}>
+                  {byDow.map((v, i) => {
+                    const pct = (v / maxDow) * 100;
+                    const names = pt ? DAY_NAMES_PT : DAY_NAMES_EN;
+                    return (
+                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                        <div style={{ width: "100%", height: `${Math.max(pct, 4)}%`, background: "var(--accent)", borderRadius: "3px 3px 0 0", opacity: 0.75, minHeight: 4 }} />
+                        <div style={{ fontSize: 9, color: "var(--ink-3)", fontWeight: 600 }}>{names[i]}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-3)" }}>
+                  {pt
+                    ? `Média mensal de gastos: ${fmtMoney(avgMonthlySpend, lang, true)}`
+                    : `Avg monthly spending: ${fmtMoney(avgMonthlySpend, lang, true)}`}
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="card">
-        <div className="card-head">
-          <h3 className="card-title">{lang === "pt" ? "Comparativo mensal · últimos 6 meses" : "Monthly comparison · last 6 months"}</h3>
+      {reportTab === "categories" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {catBreakdown.map(c => {
+            const subs = bySub[c.k] ? Object.entries(bySub[c.k]).sort(([, a], [, b]) => b - a) : [];
+            return (
+              <div key={c.k} className="card">
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px" }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 3, background: CAT_COLORS[c.k] ?? "var(--ink-3)", flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{I18N[lang].categories[c.k] ?? c.k}</div>
+                    <div style={{ marginTop: 4, height: 5, background: "var(--bg-3)", borderRadius: 3 }}>
+                      <div style={{ width: `${catTotal > 0 ? (c.v / catTotal * 100) : 0}%`, height: "100%", background: CAT_COLORS[c.k] ?? "var(--ink-3)", borderRadius: 3 }} />
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div className="num" style={{ fontWeight: 700, fontSize: 14 }}>{fmtMoney(c.v, lang, true)}</div>
+                    <div style={{ fontSize: 10, color: "var(--ink-3)" }}>{catTotal > 0 ? (c.v / catTotal * 100).toFixed(1) : 0}%</div>
+                  </div>
+                </div>
+                {subs.length > 0 && (
+                  <div style={{ borderTop: "1px solid var(--border)", background: "var(--bg-2)", padding: "6px 0" }}>
+                    {subs.map(([sub, v]) => (
+                      <div key={sub} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 16px 4px 36px", fontSize: 11 }}>
+                        <span style={{ flex: 1, color: "var(--ink-2)" }}>{sub}</span>
+                        <div style={{ width: 80, height: 4, background: "var(--bg-3)", borderRadius: 2 }}>
+                          <div style={{ width: `${c.v > 0 ? (v / c.v * 100) : 0}%`, height: "100%", background: CAT_COLORS[c.k] + "90", borderRadius: 2 }} />
+                        </div>
+                        <span className="num" style={{ width: 70, textAlign: "right", color: "var(--ink-2)" }}>{fmtMoney(v, lang, true)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-        <table className="t">
-          <thead><tr>
-            <th>{lang === "pt" ? "Mês" : "Month"}</th>
-            <th className="r">{lang === "pt" ? "Receita" : "Income"}</th>
-            <th className="r">{lang === "pt" ? "Gastos" : "Expense"}</th>
-            <th className="r">{lang === "pt" ? "Líquido" : "Net"}</th>
-            <th className="r">{lang === "pt" ? "Poupança" : "Savings"}</th>
-            <th>{lang === "pt" ? "Categoria top" : "Top category"}</th>
-            <th className="r">Δ {lang === "pt" ? "anterior" : "prev"}</th>
-          </tr></thead>
-          <tbody>
-            {stats.cashflow.slice(-6).map((m, i, arr) => {
-              const net = m.income - m.expense;
-              const rate = m.income > 0 ? (net / m.income * 100).toFixed(1) : "—";
-              const prev = i > 0 ? arr[i - 1].expense : m.expense;
-              const delta = prev > 0 ? ((m.expense - prev) / prev * 100).toFixed(1) : "0";
-              return (
+      )}
+
+      {reportTab === "merchants" && (
+        <div className="card">
+          <div className="card-head">
+            <h3 className="card-title">{pt ? "Top estabelecimentos" : "Top merchants"}</h3>
+            <span className="chip-sm">{topMerchants.length}</span>
+          </div>
+          <table className="t">
+            <thead><tr>
+              <th>#</th>
+              <th>{pt ? "Estabelecimento" : "Merchant"}</th>
+              <th>{pt ? "Categoria" : "Category"}</th>
+              <th className="r">{pt ? "Transações" : "Transactions"}</th>
+              <th className="r">{pt ? "Total" : "Total"}</th>
+              <th className="r">{pt ? "Média" : "Avg"}</th>
+              <th></th>
+            </tr></thead>
+            <tbody>
+              {topMerchants.map((m, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{lang === "pt" ? `Mês ${m.m}` : `Month ${m.m}`}</td>
-                  <td className="r num pos">{fmtMoney(m.income, lang, true)}</td>
-                  <td className="r num">{fmtMoney(m.expense, lang, true)}</td>
-                  <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(net, lang, true)}</td>
-                  <td className="r num">{rate}%</td>
-                  <td>{stats.topCat ? <span className="pill"><span className="cat-dot" style={{ background: CAT_COLORS[stats.topCat] }} />{I18N[lang].categories[stats.topCat] ?? stats.topCat}</span> : "—"}</td>
-                  <td className={"r num " + (Number(delta) > 0 ? "neg" : "pos")}>{Number(delta) > 0 ? "+" : ""}{delta}%</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{i + 1}</td>
+                  <td style={{ fontWeight: 500 }}>{m.name}</td>
+                  <td>
+                    <span className="pill" style={{ fontSize: 10 }}>
+                      <span className="cat-dot" style={{ background: CAT_COLORS[m.cat] }} />
+                      {I18N[lang].categories[m.cat] ?? m.cat}
+                    </span>
+                  </td>
+                  <td className="r muted" style={{ fontSize: 11 }}>{m.count}</td>
+                  <td className="r num" style={{ fontWeight: 600 }}>{fmtMoney(m.total, lang, true)}</td>
+                  <td className="r num muted" style={{ fontSize: 11 }}>{fmtMoney(m.total / m.count, lang, true)}</td>
+                  <td style={{ width: 70 }}>
+                    <div style={{ height: 4, background: "var(--bg-3)", borderRadius: 2 }}>
+                      <div style={{ width: `${topMerchants[0].total > 0 ? (m.total / topMerchants[0].total * 100) : 0}%`, height: "100%", background: CAT_COLORS[m.cat] ?? "var(--ink-3)", borderRadius: 2 }} />
+                    </div>
+                  </td>
                 </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {reportTab === "monthly" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Mini bars per month */}
+          <div className="card card-pad">
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{pt ? "Gastos mensais" : "Monthly expenses"}</div>
+            {(() => {
+              const maxExp = Math.max(...monthlyData.map(m => m.expense), 1);
+              return (
+                <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 100, overflowX: "auto" }}>
+                  {monthlyData.map((m, i) => {
+                    const pct = (m.expense / maxExp) * 100;
+                    const label = new Date(m.ym + "-01").toLocaleDateString(pt ? "pt-BR" : "en-US", { month: "short" });
+                    return (
+                      <div key={i} style={{ flex: "0 0 auto", minWidth: 32, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                        <div style={{ fontSize: 8, color: "var(--ink-3)", fontWeight: 600 }}>{fmtMoney(m.expense / 1000, lang, false)}k</div>
+                        <div style={{ width: 28, height: `${Math.max(pct, 4)}%`, background: "var(--ink)", borderRadius: "3px 3px 0 0", opacity: 0.75, minHeight: 4 }} />
+                        <div style={{ fontSize: 9, color: "var(--ink-3)", fontWeight: 600 }}>{label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
               );
-            })}
-          </tbody>
-        </table>
-      </div>
+            })()}
+          </div>
+
+          <div className="card">
+            <div className="card-head"><h3 className="card-title">{pt ? "Comparativo mensal" : "Monthly comparison"}</h3></div>
+            <table className="t">
+              <thead><tr>
+                <th>{pt ? "Mês" : "Month"}</th>
+                <th className="r">{pt ? "Receita" : "Income"}</th>
+                <th className="r">{pt ? "Gastos" : "Expense"}</th>
+                <th className="r">{pt ? "Líquido" : "Net"}</th>
+                <th className="r">{pt ? "Poupança" : "Savings"}</th>
+                <th className="r">Δ</th>
+              </tr></thead>
+              <tbody>
+                {monthlyData.map((m, i, arr) => {
+                  const mNet = m.income - m.expense;
+                  const rate = m.income > 0 ? (mNet / m.income * 100).toFixed(0) : "—";
+                  const prev = i > 0 ? arr[i - 1].expense : m.expense;
+                  const delta = prev > 0 ? ((m.expense - prev) / prev * 100).toFixed(1) : "0";
+                  const label = new Date(m.ym + "-01").toLocaleDateString(pt ? "pt-BR" : "en-US", { month: "long", year: "numeric" });
+                  return (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 600, fontSize: 12 }}>{label}</td>
+                      <td className="r num pos">{m.income > 0 ? fmtMoney(m.income, lang, true) : "—"}</td>
+                      <td className="r num">{fmtMoney(m.expense, lang, true)}</td>
+                      <td className={"r num" + (mNet >= 0 ? " pos" : "")} style={{ fontWeight: 600 }}>{(mNet >= 0 ? "+" : "") + fmtMoney(mNet, lang, true)}</td>
+                      <td className="r num muted">{rate}{typeof rate === "string" && rate !== "—" ? "%" : ""}</td>
+                      <td className={"r num " + (Number(delta) > 0 ? "neg" : "pos")} style={{ fontSize: 11 }}>
+                        {i > 0 ? (Number(delta) > 0 ? "+" : "") + delta + "%" : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -883,24 +883,189 @@ export function Toast({ message, kind = "success", onDismiss }: ToastProps) {
 
 interface ProjectionPageProps {
   lang: Lang;
+  txns?: Txn[];
 }
-export function ProjectionPage({ lang }: ProjectionPageProps) {
+
+function fmtProjectionMonth(offset: number, lang: Lang): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + offset);
+  return d.toLocaleDateString(lang === "pt" ? "pt-BR" : "en-US", { month: "long", year: "numeric" });
+}
+
+export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
+  const pt = lang === "pt";
+
+  // Confirmed recurring: txns with recurring=true, group by merchant, compute avg monthly amount
+  const confirmedGroups: Record<string, { merch: string; cat: string; sub: string; acct: string; avgAmt: number; confirmed: true }> = {};
+  txns.filter(t => t.recurring && t.amt < 0).forEach(t => {
+    const k = t.merch.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!confirmedGroups[k]) {
+      confirmedGroups[k] = { merch: t.merch, cat: t.cat, sub: t.sub ?? "", acct: t.acct, avgAmt: 0, confirmed: true };
+    }
+  });
+  // Average amounts from all txns of each group
+  Object.keys(confirmedGroups).forEach(k => {
+    const matching = txns.filter(t => t.recurring && t.merch.toLowerCase().replace(/[^a-z0-9]/g, "") === k && t.amt < 0);
+    if (matching.length) confirmedGroups[k].avgAmt = matching.reduce((s, t) => s + Math.abs(t.amt), 0) / matching.length;
+  });
+
+  // Unconfirmed recurring: same detection logic as RecurringPage, excludes already-confirmed
+  const unconfirmedItems: Array<{ merch: string; cat: string; sub: string; acct: string; avgAmt: number; confirmed: false }> = [];
+  const groupsRaw: Record<string, Txn[]> = {};
+  txns.filter(t => t.cat !== "transfer" && t.amt < 0 && !t.recurring).forEach(t => {
+    const k = t.merch.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!groupsRaw[k]) groupsRaw[k] = [];
+    groupsRaw[k].push(t);
+  });
+  Object.entries(groupsRaw).forEach(([, txList]) => {
+    if (txList.length < 2) return;
+    const months = new Set(txList.map(t => t.d.slice(0, 7)));
+    if (months.size < 2) return;
+    const amts = txList.map(t => Math.abs(t.amt));
+    const avg = amts.reduce((s, a) => s + a, 0) / amts.length;
+    if (Math.max(...amts.map(a => Math.abs(a - avg) / avg)) > 0.15) return;
+    const latest = [...txList].sort((a, b) => b.d.localeCompare(a.d))[0];
+    unconfirmedItems.push({ merch: latest.merch, cat: latest.cat, sub: latest.sub ?? "", acct: latest.acct, avgAmt: avg, confirmed: false });
+  });
+
+  const confirmedList = Object.values(confirmedGroups).sort((a, b) => b.avgAmt - a.avgAmt);
+  const allItems = [...confirmedList, ...unconfirmedItems];
+
+  // Also estimate income from recurring confirmed income txns
+  const incomeGroups: Record<string, { merch: string; avgAmt: number }> = {};
+  txns.filter(t => t.recurring && t.amt > 0).forEach(t => {
+    const k = t.merch.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!incomeGroups[k]) incomeGroups[k] = { merch: t.merch, avgAmt: 0 };
+  });
+  Object.keys(incomeGroups).forEach(k => {
+    const matching = txns.filter(t => t.recurring && t.amt > 0 && t.merch.toLowerCase().replace(/[^a-z0-9]/g, "") === k);
+    if (matching.length) incomeGroups[k].avgAmt = matching.reduce((s, t) => s + t.amt, 0) / matching.length;
+  });
+  const confirmedIncome = Object.values(incomeGroups).reduce((s, g) => s + g.avgAmt, 0);
+  const projectedExpense = confirmedList.reduce((s, i) => s + i.avgAmt, 0);
+  const projectedNet = confirmedIncome - projectedExpense;
+
+  const months6 = [1, 2, 3, 4, 5, 6];
+
+  if (allItems.length === 0 && confirmedIncome === 0) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <h1 className="page-title">{I18N[lang].nav_projection}</h1>
+            <p className="page-sub">{pt ? "Projeção dos próximos 6 meses" : "6-month cash flow projection"}</p>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
+          <Icon name="trend" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
+            {pt ? "Nenhuma projeção disponível" : "No projection available"}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 360, lineHeight: 1.65 }}>
+            {pt
+              ? "Confirme recorrentes na página de Recorrentes & Parcelas para ativar a projeção. Itens com o mesmo estabelecimento em 2+ meses são detectados automaticamente."
+              : "Confirm recurring items on the Recurring & Installments page to enable projections. Items with the same merchant in 2+ months are auto-detected."}
+          </div>
+          <button className="btn sm" style={{ marginTop: 20 }} onClick={() => (window as any).__navigate?.("recurring")}>
+            {pt ? "Ir para Recorrentes" : "Go to Recurring"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{I18N[lang].nav_projection}</h1>
-          <p className="page-sub">{lang === "pt" ? "Projeção dos próximos 6 meses" : "6-month cash flow projection"}</p>
+          <p className="page-sub">
+            {confirmedList.length} {pt ? "confirmado(s)" : "confirmed"} · {unconfirmedItems.length} {pt ? "sugerido(s)" : "suggested"}
+          </p>
+        </div>
+        <button className="btn ghost sm" onClick={() => (window as any).__navigate?.("recurring")}>
+          {pt ? "Gerenciar recorrentes" : "Manage recurring"}
+        </button>
+      </div>
+
+      {/* Monthly projection summary */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
+        {[
+          { l: pt ? "Receita mensal" : "Monthly income", v: confirmedIncome, pos: true },
+          { l: pt ? "Gastos recorrentes" : "Recurring expenses", v: projectedExpense, pos: false },
+          { l: pt ? "Saldo projetado" : "Projected net", v: projectedNet, pos: projectedNet >= 0 },
+        ].map((k, i) => (
+          <div key={i} className="card card-pad">
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 4 }}>{k.l}</div>
+            <div className={"num" + (k.pos ? " pos" : "")} style={{ fontSize: 18, fontWeight: 700 }}>
+              {k.pos && k.v > 0 ? "+" : ""}{fmtMoney(k.v * (i === 1 ? -1 : 1), lang)}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 6-month forward projection grid */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-head">
+          <h3 className="card-title">{pt ? "Próximos 6 meses" : "Next 6 months"}</h3>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="t">
+            <thead><tr>
+              <th style={{ minWidth: 140 }}>{pt ? "Mês" : "Month"}</th>
+              <th className="r">{pt ? "Receita" : "Income"}</th>
+              <th className="r">{pt ? "Gastos" : "Expenses"}</th>
+              <th className="r">{pt ? "Saldo" : "Net"}</th>
+            </tr></thead>
+            <tbody>
+              {months6.map(offset => {
+                const net = confirmedIncome - projectedExpense;
+                return (
+                  <tr key={offset}>
+                    <td style={{ fontWeight: 500 }}>{fmtProjectionMonth(offset, lang)}</td>
+                    <td className="r num pos">{confirmedIncome > 0 ? `+${fmtMoney(confirmedIncome, lang, true)}` : "—"}</td>
+                    <td className="r num">{projectedExpense > 0 ? fmtMoney(-projectedExpense, lang, true) : "—"}</td>
+                    <td className={"r num" + (net >= 0 ? " pos" : "")} style={{ fontWeight: 600 }}>
+                      {net >= 0 ? "+" : ""}{fmtMoney(net, lang, true)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
-        <Icon name="trend" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
-        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
-          {lang === "pt" ? "Nenhuma projeção disponível" : "No projection available"}
+
+      {/* Items breakdown */}
+      <div className="card">
+        <div className="card-head">
+          <h3 className="card-title">{pt ? "Composição mensal" : "Monthly breakdown"}</h3>
+          <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+            {pt ? "● confirmado  ○ sugerido (precisa confirmar)" : "● confirmed  ○ suggested (needs confirmation)"}
+          </span>
         </div>
-        <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
-          {lang === "pt" ? "A projeção é calculada automaticamente a partir das suas transações e recorrentes." : "Projections are calculated automatically from your transactions and recurring items."}
-        </div>
+        {allItems.map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: i < allItems.length - 1 ? "1px solid var(--border)" : "none", opacity: item.confirmed ? 1 : 0.65 }}>
+            <span style={{ fontSize: 11, flexShrink: 0 }}>{item.confirmed ? "●" : "○"}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 1 }}>
+                {item.acct} · {item.sub || item.cat}
+                {!item.confirmed && (
+                  <button className="btn ghost sm" style={{ marginLeft: 8, fontSize: 10, padding: "1px 6px", opacity: 0.8 }}
+                    onClick={() => (window as any).__navigate?.("recurring")}>
+                    {pt ? "confirmar →" : "confirm →"}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="num" style={{ fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+              {fmtMoney(-item.avgAmt, lang)}
+              <span style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-3)", marginLeft: 3 }}>/mês</span>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
