@@ -3,8 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Icon } from "./icons";
 import {
-  I18N, Lang, fmtMoney, fmtDate,
-  CAT_COLORS, ACCOUNTS, CARDS, SUBCATS, CAT_MONTH, TXNS,
+  I18N, Lang, fmtMoney,
+  CAT_COLORS, SUBCATS, CatMonth,
   Goal,
 } from "../lib/data";
 
@@ -87,12 +87,14 @@ function NewTransactionModal({ lang, onClose }: { lang: Lang; onClose: () => voi
     cat: "food",
     sub: "",
     amt: "",
-    acct: ACCOUNTS[0].id,
+    acct: "",
     notes: "",
     recurring: false,
     reimbursable: false,
     type: "expense",
     currency: "BRL",
+    installCur: "",
+    installTotal: "",
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm(f => ({ ...f, [k]: v }));
 
@@ -152,18 +154,13 @@ function NewTransactionModal({ lang, onClose }: { lang: Lang; onClose: () => voi
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <FRow label={pt ? "Conta / Cartão" : "Account / Card"}>
-            <FSelect value={form.acct} onChange={e => set("acct", e.target.value)}>
-              {ACCOUNTS.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-              <optgroup label={pt ? "Cartões" : "Cards"}>
-                {CARDS.map(c => <option key={c.id} value={c.id}>{c.brand} *{c.last4}</option>)}
-              </optgroup>
-            </FSelect>
+            <FInput value={form.acct} onChange={e => set("acct", e.target.value)} placeholder={pt ? "Ex: Nubank, C6 Bank…" : "e.g. Nubank, C6 Bank…"} />
           </FRow>
           <FRow label={pt ? "Parcelas" : "Installments"}>
             <div style={{ display: "flex", gap: 6 }}>
-              <FInput type="number" value="" placeholder="1" style={{ textAlign: "center" }} />
+              <FInput type="number" value={form.installCur} onChange={e => set("installCur", e.target.value)} placeholder="1" style={{ textAlign: "center" }} />
               <span style={{ alignSelf: "center", color: "var(--ink-3)" }}>/</span>
-              <FInput type="number" value="" placeholder="1" style={{ textAlign: "center" }} />
+              <FInput type="number" value={form.installTotal} onChange={e => set("installTotal", e.target.value)} placeholder="1" style={{ textAlign: "center" }} />
             </div>
           </FRow>
         </div>
@@ -225,13 +222,7 @@ export function CommandPalette({ lang, onClose, setRoute }: { lang: Lang; onClos
     { icon: "plus", l: pt ? "Nova transação" : "New transaction", action: () => { onClose(); (window as any).__modal?.("newtxn", {}); } },
     { icon: "download", l: pt ? "Exportar dados" : "Export data", action: () => { onClose(); (window as any).__modal?.("export", {}); } },
     { icon: "eye_off", l: pt ? "Alternar modo privacidade" : "Toggle privacy mode", action: () => { (window as any).__togglePrivacy?.(); onClose(); } },
-    { icon: "refresh", l: pt ? "Salvar vault agora" : "Save vault now", action: () => { (window as any).__toast?.(pt ? "💾 Vault salvo" : "💾 Vault saved"); onClose(); } },
-    ...TXNS.slice(0, 6).map(tx => ({
-      icon: tx.amt > 0 ? "arrow_up" : "arrow_down",
-      l: tx.merch,
-      sub: fmtMoney(tx.amt, lang) + " · " + fmtDate(tx.d, lang),
-      action: () => { (window as any).__openTxnEdit?.(tx); onClose(); },
-    })),
+    { icon: "refresh", l: pt ? "Salvar vault agora" : "Save vault now", action: () => { (window as any).__vaultSave?.(); onClose(); } },
   ];
 
   const filtered = q.trim()
@@ -294,10 +285,9 @@ export function CommandPalette({ lang, onClose, setRoute }: { lang: Lang; onClos
 
 function FilterModal({ lang, onClose }: { lang: Lang; onClose: () => void }) {
   const pt = lang === "pt";
-  const [f, setF] = useState({ dateFrom: "2026-04-01", dateTo: "2026-04-30", cats: [] as string[], accts: [] as string[], amtMin: "", amtMax: "", type: "all" });
+  const [f, setF] = useState({ dateFrom: "2026-04-01", dateTo: "2026-04-30", cats: [] as string[], acct: "", amtMin: "", amtMax: "", type: "all" });
   const setFk = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF(x => ({ ...x, [k]: v }));
   const toggleCat = (k: string) => setFk("cats", f.cats.includes(k) ? f.cats.filter(c => c !== k) : [...f.cats, k]);
-  const toggleAcct = (id: string) => setFk("accts", f.accts.includes(id) ? f.accts.filter(a => a !== id) : [...f.accts, id]);
   const apply = () => { (window as any).__toast?.(pt ? "✓ Filtro aplicado" : "✓ Filter applied"); onClose(); };
 
   return (
@@ -326,21 +316,15 @@ function FilterModal({ lang, onClose }: { lang: Lang; onClose: () => void }) {
             ))}
           </div>
         </FRow>
-        <FRow label={pt ? "Contas" : "Accounts"}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {ACCOUNTS.map(a => (
-              <button key={a.id} onClick={() => toggleAcct(a.id)} className="pill"
-                style={{ cursor: "pointer", border: f.accts.includes(a.id) ? "1px solid var(--ink)" : "1px solid var(--border)", background: f.accts.includes(a.id) ? "var(--bg-3)" : "transparent", fontWeight: f.accts.includes(a.id) ? 600 : 400 }}>
-                {a.name}
-              </button>
-            ))}
-          </div>
+        <FRow label={pt ? "Conta" : "Account"}>
+          <input value={f.acct} onChange={e => setFk("acct", e.target.value)} placeholder={pt ? "Filtrar por conta…" : "Filter by account…"}
+            style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--border-2)", borderRadius: 8, fontSize: 13, background: "var(--bg-2)", color: "var(--ink)" }} />
         </FRow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <FRow label={pt ? "Valor mínimo" : "Min amount"}><FInput type="number" value={f.amtMin} onChange={e => setFk("amtMin", e.target.value)} placeholder="0" mono /></FRow>
           <FRow label={pt ? "Valor máximo" : "Max amount"}><FInput type="number" value={f.amtMax} onChange={e => setFk("amtMax", e.target.value)} placeholder="∞" mono /></FRow>
         </div>
-        <button className="btn ghost sm" onClick={() => setF({ dateFrom: "2026-04-01", dateTo: "2026-04-30", cats: [], accts: [], amtMin: "", amtMax: "", type: "all" })}>
+        <button className="btn ghost sm" onClick={() => setF({ dateFrom: "2026-04-01", dateTo: "2026-04-30", cats: [], acct: "", amtMin: "", amtMax: "", type: "all" })}>
           {pt ? "Limpar filtros" : "Clear filters"}
         </button>
       </MBody>
@@ -363,11 +347,36 @@ function ExportModal({ lang, onClose }: { lang: Lang; onClose: () => void }) {
 
   const doExport = () => {
     setExporting(true);
-    setTimeout(() => {
-      setExporting(false);
-      (window as any).__toast?.(pt ? `✓ Arquivo finance-pro-export.${fmt} gerado` : `✓ finance-pro-export.${fmt} ready`);
-      onClose();
-    }, 1400);
+    try {
+      const stored = localStorage.getItem("fp_txns") ?? "[]";
+      const txns = JSON.parse(stored);
+      let content: string;
+      let mime: string;
+      if (fmt === "json") {
+        content = JSON.stringify({ exportedAt: new Date().toISOString(), txns }, null, 2);
+        mime = "application/json";
+      } else {
+        const cols = ["id", "d", "merch", "cat", "sub", "acct", "amt", "notes", "recurring", "reimbursable"];
+        const rows = txns.map((t: Record<string, unknown>) => cols.map(c => {
+          const v = t[c] ?? "";
+          return typeof v === "string" && v.includes(",") ? `"${v}"` : String(v);
+        }).join(","));
+        content = [cols.join(","), ...rows].join("\n");
+        mime = "text/csv";
+      }
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `finance-pro-export.${fmt === "json" ? "json" : "csv"}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      (window as any).__toast?.(pt ? `✓ Arquivo exportado` : `✓ File exported`);
+    } catch {
+      (window as any).__toast?.(pt ? "Erro ao exportar" : "Export failed", "danger");
+    }
+    setExporting(false);
+    onClose();
   };
 
   return (
@@ -478,7 +487,7 @@ function GoalModal({ lang, onClose, goal }: { lang: Lang; onClose: () => void; g
         )}
       </MBody>
       <MFoot>
-        {isEdit && <button className="btn sm" style={{ marginRight: "auto", color: "var(--danger-fg)", borderColor: "var(--danger)" }}>{pt ? "Excluir" : "Delete"}</button>}
+        {isEdit && <button className="btn sm" style={{ marginRight: "auto", color: "var(--danger-fg)", borderColor: "var(--danger)" }} onClick={() => { (window as any).__toast?.(pt ? "Meta excluída" : "Goal deleted", "danger"); onClose(); }}>{pt ? "Excluir" : "Delete"}</button>}
         <button className="btn sm" onClick={onClose}>{pt ? "Cancelar" : "Cancel"}</button>
         <button className="btn primary sm" onClick={save}>{pt ? "Salvar meta" : "Save goal"}</button>
       </MFoot>
@@ -673,9 +682,9 @@ function NewTradeModal({ lang, onClose }: { lang: Lang; onClose: () => void }) {
 
 /* ─── 9. Budget Edit Modal ───────────────────────────────────────── */
 
-function BudgetEditModal({ lang, onClose, catKey }: { lang: Lang; onClose: () => void; catKey?: string }) {
+function BudgetEditModal({ lang, onClose, catKey, cur = 0, prev = 0, initialBudget = 0 }: { lang: Lang; onClose: () => void; catKey?: string; cur?: number; prev?: number; initialBudget?: number }) {
   const pt = lang === "pt";
-  const item = CAT_MONTH.find(c => c.k === catKey) ?? { k: catKey ?? "", cur: 0, prev: 0, budget: 0 };
+  const item: CatMonth = { k: catKey ?? "", cur, prev, budget: initialBudget };
   const [budget, setBudget] = useState(item.budget);
 
   return (

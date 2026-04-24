@@ -46,12 +46,12 @@ export function Sidebar({ lang, route, setRoute }: SidebarProps) {
       <nav className="nav">
         <div className="nav-sect">{t.nav_overview}</div>
         <NavItem icon="dashboard" label={t.nav_dashboard} active={route === "dashboard"} onClick={() => setRoute("dashboard")} />
-        <NavItem icon="insight" label={t.nav_insights} active={route === "insights"} onClick={() => setRoute("insights")} badge={8} warn />
+        <NavItem icon="insight" label={t.nav_insights} active={route === "insights"} onClick={() => setRoute("insights")} />
         <NavItem icon="report" label={t.nav_reports} active={route === "reports"} onClick={() => setRoute("reports")} />
 
         <div className="nav-sect" style={{ marginTop: 8 }}>{lang === "pt" ? "Meu dinheiro" : "My money"}</div>
         <NavItem icon="wallet" label={t.nav_accounts} active={route === "accounts"} onClick={() => setRoute("accounts")} />
-        <NavItem icon="card" label={t.nav_cards} active={route === "cards"} onClick={() => setRoute("cards")} badge={4} />
+        <NavItem icon="card" label={t.nav_cards} active={route === "cards"} onClick={() => setRoute("cards")} />
         <NavItem icon="trend" label={t.nav_invest} active={route === "invest"} onClick={() => setRoute("invest")} />
 
         <div className="nav-sect" style={{ marginTop: 8 }}>{lang === "pt" ? "Planejamento" : "Planning"}</div>

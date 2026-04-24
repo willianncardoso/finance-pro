@@ -262,7 +262,7 @@ function VaultWizard({ mode, lang, recentVaults, onClose, onConfirm }: VaultWiza
                   {selectedRecent === v.path && <Icon name="check" style={{ width: 14, height: 14, stroke: "var(--ink)" }} className="" />}
                 </div>
               ))}
-              <button className="btn ghost sm" style={{ width: "100%", justifyContent: "center", marginTop: 4 }}>
+              <button className="btn ghost sm" style={{ width: "100%", justifyContent: "center", marginTop: 4 }} onClick={() => (window as any).__vaultOpen?.()}>
                 <Icon name="plus" className="btn-icon" />{pt ? "Outro vault…" : "Other vault…"}
               </button>
             </div>
@@ -446,7 +446,7 @@ export function VaultPage({ lang }: VaultPageProps) {
             <div style={{ padding: "9px 11px", background: "var(--bg-2)", borderRadius: 8, display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
               <Icon name="file" style={{ width: 13, height: 13, stroke: "var(--ink-3)" }} className="" />
               <span className="mono" style={{ fontSize: 11, color: "var(--ink-2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{vault.backupPath}</span>
-              <button className="btn ghost sm">{pt ? "Alterar" : "Change"}</button>
+              <button className="btn ghost sm" onClick={() => (window as any).__toast?.(pt ? "Backup em nuvem em breve" : "Cloud backup coming soon", "info")}>{pt ? "Alterar" : "Change"}</button>
             </div>
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-2)", marginBottom: 6 }}>{pt ? "Frequência" : "Frequency"}</div>
@@ -464,7 +464,7 @@ export function VaultPage({ lang }: VaultPageProps) {
               {pt ? "Último backup: " : "Last backup: "}
               {vault.lastBackup.toLocaleString(lang === "pt" ? "pt-BR" : "en-US", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
             </div>
-            <button className="btn sm" style={{ marginTop: 10 }}>
+            <button className="btn sm" style={{ marginTop: 10 }} onClick={() => (window as any).__vaultSave?.()}>
               <Icon name="refresh" className="btn-icon" />{pt ? "Fazer backup agora" : "Backup now"}
             </button>
           </div>
@@ -512,17 +512,45 @@ export function VaultPage({ lang }: VaultPageProps) {
         </div>
         <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
           {[
-            { l: pt ? "Mover vault para outro local" : "Move vault to another location", d: pt ? "Copia e move o arquivo .db para outro caminho" : "Copies and moves the .db file to a new path", icon: "external", btn: pt ? "Mover" : "Move", danger: false },
-            { l: pt ? "Alterar senha mestra" : "Change master password", d: pt ? "Re-criptografa todo o banco com a nova senha" : "Re-encrypts the entire database with a new password", icon: "lock", btn: pt ? "Alterar" : "Change", danger: false },
-            { l: pt ? "Exportar dados brutos" : "Export raw data", d: pt ? "Exporta CSV/JSON sem criptografia — cuidado" : "Exports CSV/JSON unencrypted — be careful", icon: "download", btn: pt ? "Exportar" : "Export", danger: false },
-            { l: pt ? "Apagar vault" : "Delete vault", d: pt ? "Remove permanentemente todos os dados. Irreversível." : "Permanently removes all data. Irreversible.", icon: "x", btn: pt ? "Apagar" : "Delete", danger: true },
+            {
+              l: pt ? "Mover vault para outro local" : "Move vault to another location",
+              d: pt ? "Copia e move o arquivo .db para outro caminho" : "Copies and moves the .db file to a new path",
+              icon: "external", btn: pt ? "Mover" : "Move", danger: false,
+              action: () => (window as any).__toast?.(pt ? "Em breve" : "Coming soon", "info"),
+            },
+            {
+              l: pt ? "Alterar senha mestra" : "Change master password",
+              d: pt ? "Re-criptografa todo o banco com a nova senha" : "Re-encrypts the entire database with a new password",
+              icon: "lock", btn: pt ? "Alterar" : "Change", danger: false,
+              action: () => (window as any).__toast?.(pt ? "Em breve" : "Coming soon", "info"),
+            },
+            {
+              l: pt ? "Exportar dados brutos" : "Export raw data",
+              d: pt ? "Exporta CSV/JSON sem criptografia — cuidado" : "Exports CSV/JSON unencrypted — be careful",
+              icon: "download", btn: pt ? "Exportar" : "Export", danger: false,
+              action: () => (window as any).__vaultSave?.(),
+            },
+            {
+              l: pt ? "Apagar vault" : "Delete vault",
+              d: pt ? "Remove permanentemente todos os dados. Irreversível." : "Permanently removes all data. Irreversible.",
+              icon: "x", btn: pt ? "Apagar" : "Delete", danger: true,
+              action: () => {
+                if (confirm(pt ? "Apagar todos os dados? Esta ação é irreversível." : "Delete all data? This action is irreversible.")) {
+                  localStorage.removeItem("fp_txns");
+                  localStorage.removeItem("fp_state");
+                  localStorage.removeItem("fp_route");
+                  localStorage.removeItem("fp_imports");
+                  window.location.reload();
+                }
+              },
+            },
           ].map((a, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{a.l}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 2 }}>{a.d}</div>
               </div>
-              <button className="btn sm" style={a.danger ? { borderColor: "var(--danger)", color: "var(--danger-fg)" } : {}}>
+              <button className="btn sm" style={a.danger ? { borderColor: "var(--danger)", color: "var(--danger-fg)" } : {}} onClick={a.action}>
                 <Icon name={a.icon} className="btn-icon" />{a.btn}
               </button>
             </div>

@@ -250,6 +250,13 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
   const [logs, setLogs] = useState<string[]>([]);
   const [history, setHistory] = useState<{ name: string; when: string; count: number }[]>([]);
   const [rawContent, setRawContent] = useState("");
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("fp_imports");
+      if (stored) setHistory(JSON.parse(stored));
+    } catch {}
+  }, []);
   const [parsedTxns, setParsedTxns] = useState<Txn[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -305,11 +312,16 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
       setLogs(prev => [...prev, ...(lang === "pt"
         ? [`Salvando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
         : [`Saving ${count} transactions...`, `✓ Local database updated`, `✓ Done`])]);
-      setHistory(prev => [{
+      const entry = {
         name: fileName,
         when: new Date().toLocaleDateString(lang === "pt" ? "pt-BR" : "en-US", { day: "2-digit", month: "short", year: "numeric" }),
         count,
-      }, ...prev]);
+      };
+      setHistory(prev => {
+        const updated = [entry, ...prev];
+        try { localStorage.setItem("fp_imports", JSON.stringify(updated)); } catch {}
+        return updated;
+      });
       setPipeStep(6);
       onImportComplete?.(parsedTxns);
     }, 1200);
@@ -696,7 +708,7 @@ export function ReportsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
             <button className={period === "12m" ? "on" : ""} onClick={() => setPeriod("12m")}>{t.last_12m}</button>
             <button className={period === "ytd" ? "on" : ""} onClick={() => setPeriod("ytd")}>{t.ytd}</button>
           </div>
-          <button className="btn sm" onClick={() => (window as any).__toast?.(lang === "pt" ? "Exportação em PDF/CSV: em breve" : "PDF/CSV export: coming soon", "warn")}>
+          <button className="btn sm" onClick={() => (window as any).__modal?.("export", {})}>
             <Icon name="download" className="btn-icon" />{lang === "pt" ? "Exportar" : "Export"}
           </button>
         </div>
@@ -822,7 +834,7 @@ export function BudgetPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           <h1 className="page-title">{t.nav_budget}</h1>
           <div className="page-sub">{lang === "pt" ? "Orçamento mensal + metas de longo prazo" : "Monthly budget + long-term goals"}</div>
         </div>
-        <button className="btn primary sm" onClick={() => (window as any).__toast?.(lang === "pt" ? "Nova meta: em breve" : "New goal: coming soon", "warn")}>
+        <button className="btn primary sm" onClick={() => (window as any).__modal?.("goal", {})}>
           <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova meta" : "New goal"}
         </button>
       </div>
@@ -868,7 +880,7 @@ export function BudgetPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{t.section_goals}</h3>
-          <button className="btn sm" onClick={() => (window as any).__toast?.(lang === "pt" ? "Metas: em breve" : "Goals: coming soon", "info")}>
+          <button className="btn sm" onClick={() => (window as any).__modal?.("goal", {})}>
             <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova meta" : "New goal"}
           </button>
         </div>
@@ -1117,7 +1129,7 @@ export function ComparisonPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
               </button>
             ))}
           </div>
-          <button className="btn sm" onClick={() => (window as any).__toast?.(lang === "pt" ? "Exportação: em breve" : "Export: coming soon", "info")}>
+          <button className="btn sm" onClick={() => (window as any).__modal?.("export", {})}>
             <Icon name="download" className="btn-icon" />{lang === "pt" ? "Exportar" : "Export"}
           </button>
         </div>
