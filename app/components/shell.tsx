@@ -59,6 +59,7 @@ export function Sidebar({ lang, route, setRoute }: SidebarProps) {
         <NavItem icon="trend" label={t.nav_projection} active={route === "projection"} onClick={() => setRoute("projection")} />
         <NavItem icon="refresh" label={t.nav_recurring} active={route === "recurring"} onClick={() => setRoute("recurring")} />
         <NavItem icon="upload" label={t.nav_import} active={route === "import"} onClick={() => setRoute("import")} />
+        <NavItem icon="lock" label={lang === "pt" ? "Vault & armazenamento" : "Vault & storage"} active={route === "vault"} onClick={() => setRoute("vault")} />
         <NavItem icon="settings" label={t.nav_settings} active={route === "settings"} onClick={() => setRoute("settings")} />
       </nav>
       <div className="sidebar-foot">
@@ -93,7 +94,7 @@ export function Topbar({ lang, setLang, privacy, setPrivacy, setRoute, onNewTxn 
   const t = I18N[lang];
   return (
     <header className="topbar">
-      <div className="search">
+      <div className="search" style={{ cursor: "pointer" }} onClick={() => (window as any).__modal?.("cmdpalette", {})}>
         <Icon name="search" style={{ width: 14, height: 14 }} className="" />
         <span>{t.search_placeholder}</span>
         <span className="kbd">⌘K</span>

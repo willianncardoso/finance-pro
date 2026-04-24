@@ -7,7 +7,8 @@ import {
   AccountsPage, CardsPage, InvestPage, ImportPage,
   InsightsPage, ReportsPage, BudgetPage, CategoriesPage, SettingsPage, ComparisonPage,
 } from "./components/pages";
-import { EditDrawer, Toast, ProjectionPage, RecurringPage } from "./components/edit-drawer";
+import { EditDrawer, Toast, ProjectionPage, RecurringPage, VaultPage } from "./components/edit-drawer";
+import { ModalRenderer, ModalState } from "./components/modals";
 import { Txn } from "./lib/data";
 
 declare global {
@@ -48,6 +49,7 @@ export default function Home() {
   const [toast, setToast] = useState<{ message: string; kind: "success" | "warn" | "danger" } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [txns, setTxns] = useState<Txn[]>([]);
+  const [modal, setModal] = useState<ModalState | null>(null);
 
   const hasData = txns.length > 0;
 
@@ -81,14 +83,31 @@ export default function Home() {
   }, [route, hydrated]);
 
   useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setModal(m => m?.type === "cmdpalette" ? null : { type: "cmdpalette", data: {} });
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  useEffect(() => {
     window.__openTxnEdit = (txn: Txn) => setEditTxn(txn);
     (window as any).__navigate = navigate;
     (window as any).__toast = (message: string, kind: "success" | "warn" | "danger" = "success") =>
       setToast({ message, kind });
+    (window as any).__modal = (type: string, data: Record<string, unknown> = {}) =>
+      setModal({ type, data });
+    (window as any).__togglePrivacy = () =>
+      setState(prev => ({ ...prev, privacy: !prev.privacy }));
     return () => {
       delete window.__openTxnEdit;
       delete (window as any).__navigate;
       delete (window as any).__toast;
+      delete (window as any).__modal;
+      delete (window as any).__togglePrivacy;
     };
   }, []);
 
@@ -129,7 +148,7 @@ export default function Home() {
         privacy={state.privacy}
         setPrivacy={p => updateState({ privacy: p })}
         setRoute={navigate}
-        onNewTxn={() => setEditTxn({ d: new Date().toISOString().slice(0, 10), merch: "", cat: "", acct: "", amt: 0 })}
+        onNewTxn={() => setModal({ type: "newtxn", data: {} })}
       />
 
       <main className="main">
@@ -150,6 +169,7 @@ export default function Home() {
         {route === "projection" && <ProjectionPage lang={state.lang} />}
         {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} />}
         {route === "settings" && <SettingsPage lang={state.lang} />}
+        {route === "vault" && <VaultPage lang={state.lang} />}
       </main>
 
       <button
@@ -175,6 +195,13 @@ export default function Home() {
       {toast && (
         <Toast message={toast.message} kind={toast.kind} onDismiss={() => setToast(null)} />
       )}
+
+      <ModalRenderer
+        modal={modal}
+        lang={state.lang}
+        onClose={() => setModal(null)}
+        setRoute={navigate}
+      />
     </div>
   );
 }
