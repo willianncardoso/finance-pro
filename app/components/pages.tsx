@@ -929,6 +929,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
           }
 
           // ── Normal CSV mode ──────────────────────────────────────────
+          const detected = detectFormat(rawContent, fileName);
           const { fmt, rawHeader } = parseFile(rawContent, fileName, acctName || undefined);
           setDetectedFmt(fmt);
           const fmtLabel: Record<CsvFormat, string> = {
@@ -936,6 +937,12 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
             nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV',
             ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
           };
+          // Debug details always included
+          const normFn = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+          const hCols = rawHeader.split(detected.sep === ';' ? ';' : ',').slice(0, 5).map(c => normFn(c.trim())).join(' | ');
+          const debugLines = [
+            `  sep="${detected.sep}" headerLn=${detected.headerIdx} cols=[${hCols}]`,
+          ];
           if (fmt === 'numbers') {
             newLogs = pt
               ? [`✗ Arquivo Apple Numbers detectado`, `  Exporte como CSV no Numbers: Arquivo → Exportar para → CSV`, `  Depois importe o arquivo .csv gerado`]
@@ -948,16 +955,22 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
           if (fmt === 'generic') {
             // Unknown format — warn and pause for user confirmation
             const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
-            newLogs = pt
-              ? [`⚠ Formato não reconhecido`, `  Header: ${headerPreview}`, `  O analisador genérico tentará extrair data e valor.`, `  Confirme para continuar ou cancele.`]
-              : [`⚠ Unrecognized format`, `  Header: ${headerPreview}`, `  The generic parser will try to extract date and amount.`, `  Confirm to continue or cancel.`];
+            newLogs = [
+              `⚠ Formato não reconhecido`,
+              `  Header: ${headerPreview}`,
+              ...debugLines,
+              `  O analisador genérico tentará extrair data e valor.`,
+              `  Confirme para continuar ou cancele.`,
+            ];
             setFmtWarnPaused(true);
             pauseForFmtWarning = true;
           } else {
             const headerPreview = rawHeader.length > 60 ? rawHeader.slice(0, 60) + '…' : rawHeader;
-            newLogs = pt
-              ? [`✓ Formato detectado: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`]
-              : [`✓ Format detected: ${fmtLabel[fmt]}`, `  Header: ${headerPreview}`];
+            newLogs = [
+              `✓ Formato: ${fmtLabel[fmt]}`,
+              `  Header: ${headerPreview}`,
+              ...debugLines,
+            ];
           }
         } else if (pipeStep === 2) {
           const nonEmpty = cleanLines(rawContent).filter(l => l.trim()).length;
@@ -969,15 +982,22 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
           const { txns: result } = parseFile(rawContent, fileName, acctName || undefined);
           setParsedTxns(result);
           if (result.length === 0) {
-            newLogs = pt
-              ? [`✗ Nenhuma transação encontrada`, `  Verifique se o arquivo é um CSV válido do C6 ou Nubank`]
-              : [`✗ No transactions found`, `  Check that the file is a valid C6 or Nubank CSV`];
+            newLogs = [
+              `✗ Nenhuma transação encontrada`,
+              `  fmt=${detectedFmt} — verifique se o arquivo é válido`,
+            ];
           } else {
             const uncategorized = result.filter(tx => tx.cat === 'shopping' && tx.sub === 'Outros').length;
             const categorized = result.length - uncategorized;
-            newLogs = pt
-              ? [`✓ ${result.length} transações extraídas`, `✓ ${categorized} categorizadas automaticamente`, uncategorized > 0 ? `○ ${uncategorized} com categoria genérica` : `✓ Todas categorizadas com sucesso`]
-              : [`✓ ${result.length} transactions extracted`, `✓ ${categorized} auto-categorized`, uncategorized > 0 ? `○ ${uncategorized} with generic category` : `✓ All categorized successfully`];
+            const kindCard = result.filter(tx => tx.kind === 'card').length;
+            const kindAcct = result.filter(tx => tx.kind === 'account').length;
+            newLogs = [
+              `✓ ${result.length} transações extraídas`,
+              `  tipo: ${kindCard} cartão / ${kindAcct} conta`,
+              `  conta: ${result[0]?.acct ?? '?'}`,
+              `✓ ${categorized} categorizadas automaticamente`,
+              uncategorized > 0 ? `○ ${uncategorized} com categoria genérica` : `✓ Todas categorizadas`,
+            ];
           }
         }
       } catch (err: any) {
@@ -1179,15 +1199,27 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: La
                 </div>
 
                 {/* Log output */}
-                <div style={{ padding: '12px 14px', background: 'var(--bg-2)', borderRadius: 8, marginBottom: (awaitingConfirm || fmtWarnPaused) ? 12 : 14, fontFamily: 'var(--font-mono)', fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
-                  {logs.map((l, i) => (
-                    <div key={i} style={{ color: l.startsWith('○') ? 'var(--ink-3)' : l.startsWith('⚠') ? 'var(--warn, #f59e0b)' : 'var(--ink)' }}>{l}</div>
-                  ))}
-                  {pipeStep < 4 && !fmtWarnPaused && <span className="pipe-cursor" style={{ color: 'var(--ink-3)' }}>▌</span>}
-                  {awaitingConfirm && (
-                    <div style={{ marginTop: 8, color: 'var(--accent-fg)', fontWeight: 600 }}>
-                      {pt ? '→ Pronto. Revise as transações abaixo e confirme.' : '→ Ready. Review transactions below and confirm.'}
-                    </div>
+                <div style={{ position: 'relative' }}>
+                  <div style={{ padding: '12px 14px', background: 'var(--bg-2)', borderRadius: 8, marginBottom: (awaitingConfirm || fmtWarnPaused) ? 12 : 14, fontFamily: 'var(--font-mono)', fontSize: 11.5, lineHeight: 1.75, minHeight: 80 }}>
+                    {logs.map((l, i) => (
+                      <div key={i} style={{ color: l.startsWith('○') ? 'var(--ink-3)' : l.startsWith('⚠') ? 'var(--warn, #f59e0b)' : l.startsWith('✗') ? 'var(--danger, #ef4444)' : 'var(--ink)' }}>{l}</div>
+                    ))}
+                    {pipeStep < 4 && !fmtWarnPaused && <span className="pipe-cursor" style={{ color: 'var(--ink-3)' }}>▌</span>}
+                    {awaitingConfirm && (
+                      <div style={{ marginTop: 8, color: 'var(--accent-fg)', fontWeight: 600 }}>
+                        {pt ? '→ Pronto. Revise as transações abaixo e confirme.' : '→ Ready. Review transactions below and confirm.'}
+                      </div>
+                    )}
+                  </div>
+                  {logs.length > 0 && (
+                    <button
+                      className="btn ghost sm"
+                      style={{ position: 'absolute', top: 6, right: 6, fontSize: 10, padding: '2px 8px', opacity: 0.6 }}
+                      onClick={() => navigator.clipboard?.writeText(logs.join('\n'))}
+                      title="Copiar log"
+                    >
+                      copiar
+                    </button>
                   )}
                 </div>
 
