@@ -232,6 +232,11 @@ export default function Home() {
       });
     };
 
+    // Bulk rename subcategory across all matching transactions
+    (window as any).__bulkUpdateSub = (cat: string, oldSub: string, newSub: string) => {
+      setTxns(prev => prev.map(t => t.cat === cat && t.sub === oldSub ? { ...t, sub: newSub } : t));
+    };
+
     // Vault file system
     (window as any).__vaultSave = async () => {
       const pt = state.lang === "pt";
@@ -283,6 +288,7 @@ export default function Home() {
       delete (window as any).__togglePrivacy;
       delete (window as any).__addTxn;
       delete (window as any).__updateTxn;
+      delete (window as any).__bulkUpdateSub;
       delete (window as any).__vaultSave;
       delete (window as any).__vaultNew;
       delete (window as any).__vaultOpen;

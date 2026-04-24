@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Icon } from "./icons";
-import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, PERIOD_PRESETS, PeriodPreset, newId, CardMeta } from "../lib/data";
+import { I18N, Lang, fmtMoney, fmtDate, CAT_COLORS, Txn, PERIOD_PRESETS, PeriodPreset, newId, CardMeta, SUBCATS } from "../lib/data";
 
 /* ─── Helpers that derive stats from real transaction data ─── */
 
@@ -2314,46 +2314,277 @@ export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEdi
 }
 
 /* ============ CATEGORIES ============ */
+interface CatConfig {
+  labels: Record<string, string>;
+  subcats: Record<string, string[]>;
+  custom: string[];
+  colors: Record<string, string>;
+}
+const EMPTY_CAT_CONFIG: CatConfig = { labels: {}, subcats: {}, custom: [], colors: {} };
+function loadCatConfig(): CatConfig {
+  try { return { ...EMPTY_CAT_CONFIG, ...JSON.parse(localStorage.getItem("fp_cat_config") ?? "{}") }; } catch { return EMPTY_CAT_CONFIG; }
+}
+function saveCatConfig(c: CatConfig) { localStorage.setItem("fp_cat_config", JSON.stringify(c)); }
+
 export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
-  const t = I18N[lang];
-  const stats = computeStats(txns);
-  const spendByCat = Object.fromEntries(stats.catSummary.map(c => [c.k, c.cur]));
+  const [config, setConfig] = useState<CatConfig>(EMPTY_CAT_CONFIG);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [editingCat, setEditingCat] = useState<string | null>(null);
+  const [editingCatVal, setEditingCatVal] = useState("");
+  const [editingSub, setEditingSub] = useState<{ cat: string; sub: string } | null>(null);
+  const [editingSubVal, setEditingSubVal] = useState("");
+  const [addingSubFor, setAddingSubFor] = useState<string | null>(null);
+  const [newSubVal, setNewSubVal] = useState("");
+  const [showNewCat, setShowNewCat] = useState(false);
+  const [newCatLabel, setNewCatLabel] = useState("");
+  const catInputRef = useRef<HTMLInputElement>(null);
+  const subInputRef = useRef<HTMLInputElement>(null);
+  const newSubInputRef = useRef<HTMLInputElement>(null);
+  const newCatInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setConfig(loadCatConfig()); }, []);
+  useEffect(() => { if (editingCat && catInputRef.current) catInputRef.current.focus(); }, [editingCat]);
+  useEffect(() => { if (editingSub && subInputRef.current) subInputRef.current.focus(); }, [editingSub]);
+  useEffect(() => { if (addingSubFor && newSubInputRef.current) newSubInputRef.current.focus(); }, [addingSubFor]);
+  useEffect(() => { if (showNewCat && newCatInputRef.current) newCatInputRef.current.focus(); }, [showNewCat]);
+
+  const updateConfig = (fn: (c: CatConfig) => CatConfig) => {
+    setConfig(prev => { const next = fn(prev); saveCatConfig(next); return next; });
+  };
+
+  const builtinKeys = Object.keys(I18N[lang].categories);
+  const allCatKeys = [...new Set([...builtinKeys, ...config.custom, ...txns.map(t => t.cat)])].filter(Boolean);
+
+  const catLabel = (k: string) => config.labels[k] ?? I18N[lang].categories[k] ?? k;
+  const catColor = (k: string) => config.colors[k] ?? CAT_COLORS[k] ?? "var(--bg-3)";
+  const catSubcats = (k: string): string[] => {
+    const base = SUBCATS[k] ?? [];
+    const cfg = config.subcats[k] ?? [];
+    const fromTxns = [...new Set(txns.filter(t => t.cat === k && t.sub).map(t => t.sub!))];
+    return [...new Set([...base, ...cfg, ...fromTxns])];
+  };
+
+  // spending this month per cat and sub
+  const now = new Date();
+  const thisYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const monthTxns = txns.filter(t => t.d.startsWith(thisYm) && !t.exclude);
+  const spendByCat: Record<string, number> = {};
+  const spendBySub: Record<string, Record<string, number>> = {};
+  const countByCat: Record<string, number> = {};
+  const countBySub: Record<string, Record<string, number>> = {};
+  for (const t of monthTxns) {
+    const abs = Math.abs(t.amt);
+    if (t.amt < 0) {
+      spendByCat[t.cat] = (spendByCat[t.cat] ?? 0) + abs;
+      countByCat[t.cat] = (countByCat[t.cat] ?? 0) + 1;
+      if (t.sub) {
+        if (!spendBySub[t.cat]) spendBySub[t.cat] = {};
+        spendBySub[t.cat][t.sub] = (spendBySub[t.cat][t.sub] ?? 0) + abs;
+        if (!countBySub[t.cat]) countBySub[t.cat] = {};
+        countBySub[t.cat][t.sub] = (countBySub[t.cat][t.sub] ?? 0) + 1;
+      }
+    }
+  }
+
+  const saveCatLabel = () => {
+    if (!editingCat) return;
+    const v = editingCatVal.trim();
+    if (v) updateConfig(c => ({ ...c, labels: { ...c.labels, [editingCat]: v } }));
+    setEditingCat(null);
+  };
+  const saveSubLabel = () => {
+    if (!editingSub) return;
+    const v = editingSubVal.trim();
+    if (v && v !== editingSub.sub) {
+      updateConfig(c => {
+        const existing = catSubcats(editingSub.cat);
+        const updated = existing.map(s => s === editingSub.sub ? v : s);
+        const newCfg = { ...c, subcats: { ...c.subcats, [editingSub.cat]: updated } };
+        return newCfg;
+      });
+      // bulk rename across txns
+      if (typeof (window as any).__bulkUpdateSub === "function") {
+        (window as any).__bulkUpdateSub(editingSub.cat, editingSub.sub, v);
+      }
+    }
+    setEditingSub(null);
+  };
+  const addSub = (cat: string) => {
+    const v = newSubVal.trim();
+    if (!v) { setAddingSubFor(null); return; }
+    updateConfig(c => {
+      const existing = catSubcats(cat);
+      if (existing.includes(v)) { setAddingSubFor(null); setNewSubVal(""); return c; }
+      return { ...c, subcats: { ...c.subcats, [cat]: [...(c.subcats[cat] ?? []), v] } };
+    });
+    setAddingSubFor(null);
+    setNewSubVal("");
+  };
+  const createCat = () => {
+    const v = newCatLabel.trim();
+    if (!v) { setShowNewCat(false); return; }
+    const key = v.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+    updateConfig(c => ({
+      ...c,
+      labels: { ...c.labels, [key]: v },
+      custom: c.custom.includes(key) ? c.custom : [...c.custom, key],
+    }));
+    setNewCatLabel("");
+    setShowNewCat(false);
+    setExpanded(prev => new Set([...prev, key]));
+  };
+
+  const toggle = (k: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    next.has(k) ? next.delete(k) : next.add(k);
+    return next;
+  });
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <h1 className="page-title">{t.nav_categories}</h1>
-          <div className="page-sub">{lang === "pt" ? "Regras automáticas + categorias personalizadas" : "Automatic rules + custom categories"}</div>
+          <h1 className="page-title">{I18N[lang].nav_categories}</h1>
+          <div className="page-sub">{lang === "pt" ? "Categorias e subcategorias dos seus gastos" : "Spending categories and subcategories"}</div>
         </div>
-        <button className="btn primary sm" onClick={() => (window as any).__modal?.("category", {})}>
+        <button className="btn primary sm" onClick={() => setShowNewCat(true)}>
           <Icon name="plus" className="btn-icon" />{lang === "pt" ? "Nova categoria" : "New category"}
         </button>
       </div>
 
-      <div className="grid g-3" style={{ gap: 14 }}>
-        {Object.keys(I18N[lang].categories).map(k => {
+      {showNewCat && (
+        <div className="card card-pad" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            ref={newCatInputRef}
+            className="input"
+            style={{ flex: 1, fontSize: 13 }}
+            placeholder={lang === "pt" ? "Nome da categoria..." : "Category name..."}
+            value={newCatLabel}
+            onChange={e => setNewCatLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") createCat(); if (e.key === "Escape") { setShowNewCat(false); setNewCatLabel(""); } }}
+          />
+          <button className="btn primary sm" onClick={createCat}>{lang === "pt" ? "Criar" : "Create"}</button>
+          <button className="btn sm" onClick={() => { setShowNewCat(false); setNewCatLabel(""); }}>{lang === "pt" ? "Cancelar" : "Cancel"}</button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {allCatKeys.map(k => {
+          const isOpen = expanded.has(k);
           const spend = spendByCat[k] ?? 0;
+          const count = countByCat[k] ?? 0;
+          const subs = catSubcats(k);
+          const color = catColor(k);
+          const isEditingThis = editingCat === k;
+
           return (
-            <div key={k} className="card card-pad">
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <div style={{ width: 32, height: 32, borderRadius: 7, background: CAT_COLORS[k] ?? "var(--bg-3)", opacity: 0.85, flexShrink: 0 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{I18N[lang].categories[k]}</div>
+            <div key={k} className="card" style={{ overflow: "hidden" }}>
+              {/* Category row */}
+              <div
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer", userSelect: "none" }}
+                onClick={() => { if (!isEditingThis) toggle(k); }}
+              >
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: color, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {isEditingThis ? (
+                    <input
+                      ref={catInputRef}
+                      className="input"
+                      style={{ fontSize: 13, fontWeight: 600, width: "100%", padding: "2px 6px" }}
+                      value={editingCatVal}
+                      onChange={e => setEditingCatVal(e.target.value)}
+                      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") saveCatLabel(); if (e.key === "Escape") setEditingCat(null); }}
+                      onClick={e => e.stopPropagation()}
+                      onBlur={saveCatLabel}
+                    />
+                  ) : (
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{catLabel(k)}</span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                  {spend > 0 && <span className="num" style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-1)" }}>{fmtMoney(spend, lang, true)}</span>}
+                  {count > 0 && <span style={{ fontSize: 11, color: "var(--ink-3)" }}>{count} {lang === "pt" ? "txns" : "txns"}</span>}
+                  <button
+                    className="btn ghost sm"
+                    style={{ padding: "2px 5px", opacity: 0.6 }}
+                    onClick={e => { e.stopPropagation(); setEditingCat(k); setEditingCatVal(catLabel(k)); setExpanded(prev => new Set([...prev, k])); }}
+                    title={lang === "pt" ? "Renomear" : "Rename"}
+                  >
+                    <Icon name="tag" className="btn-icon" />
+                  </button>
+                  <Icon name={isOpen ? "chevron_down" : "chevron_right"} className="nav-icon" style={{ width: 14, height: 14, opacity: 0.4 }} />
                 </div>
               </div>
-              {txns.length ? (
-                spend > 0 ? (
-                  <>
-                    <div className="num" style={{ fontSize: 18, fontWeight: 600 }}>{fmtMoney(spend, lang, true)}</div>
-                    <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 6 }}>{lang === "pt" ? "este mês" : "this month"}</div>
-                    <Sparkline data={[spend * 0.7, spend * 0.85, spend * 0.9, spend * 0.95, spend * 0.98, spend * 0.99, spend]} w={240} h={28} color={CAT_COLORS[k] ?? "var(--ink-3)"} />
-                  </>
-                ) : (
-                  <div style={{ fontSize: 11, color: "var(--ink-4)" }}>{lang === "pt" ? "sem gastos este mês" : "no spend this month"}</div>
-                )
-              ) : (
-                <div style={{ fontSize: 11, color: "var(--ink-4)" }}>{lang === "pt" ? "sem dados" : "no data"}</div>
+
+              {/* Subcategory list */}
+              {isOpen && (
+                <div style={{ borderTop: "1px solid var(--border)", background: "var(--bg-2)" }}>
+                  {subs.length === 0 && !addingSubFor && (
+                    <div style={{ padding: "8px 14px 8px 50px", fontSize: 11, color: "var(--ink-4)" }}>
+                      {lang === "pt" ? "Sem subcategorias" : "No subcategories"}
+                    </div>
+                  )}
+                  {subs.map(sub => {
+                    const subSpend = spendBySub[k]?.[sub] ?? 0;
+                    const subCount = countBySub[k]?.[sub] ?? 0;
+                    const isEditingSub = editingSub?.cat === k && editingSub?.sub === sub;
+                    return (
+                      <div key={sub} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px 7px 50px", borderBottom: "1px solid var(--border)" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {isEditingSub ? (
+                            <input
+                              ref={subInputRef}
+                              className="input"
+                              style={{ fontSize: 12, width: "100%", padding: "2px 6px" }}
+                              value={editingSubVal}
+                              onChange={e => setEditingSubVal(e.target.value)}
+                              onKeyDown={e => { if (e.key === "Enter") saveSubLabel(); if (e.key === "Escape") setEditingSub(null); }}
+                              onBlur={saveSubLabel}
+                            />
+                          ) : (
+                            <span style={{ fontSize: 12, color: "var(--ink-2)" }}>{sub}</span>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                          {subSpend > 0 && <span className="num" style={{ fontSize: 12, color: "var(--ink-2)" }}>{fmtMoney(subSpend, lang, true)}</span>}
+                          {subCount > 0 && <span style={{ fontSize: 10, color: "var(--ink-4)" }}>{subCount}</span>}
+                          <button
+                            className="btn ghost sm"
+                            style={{ padding: "2px 4px", opacity: 0.5 }}
+                            onClick={() => { setEditingSub({ cat: k, sub }); setEditingSubVal(sub); }}
+                            title={lang === "pt" ? "Renomear" : "Rename"}
+                          >
+                            <Icon name="tag" className="btn-icon" style={{ width: 11, height: 11 }} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Add subcategory */}
+                  {addingSubFor === k ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px 6px 50px" }}>
+                      <input
+                        ref={newSubInputRef}
+                        className="input"
+                        style={{ flex: 1, fontSize: 12, padding: "3px 8px" }}
+                        placeholder={lang === "pt" ? "Nova subcategoria..." : "New subcategory..."}
+                        value={newSubVal}
+                        onChange={e => setNewSubVal(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") addSub(k); if (e.key === "Escape") { setAddingSubFor(null); setNewSubVal(""); } }}
+                        onBlur={() => addSub(k)}
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      className="btn ghost sm"
+                      style={{ margin: "4px 14px 4px 50px", fontSize: 11, opacity: 0.6 }}
+                      onClick={() => setAddingSubFor(k)}
+                    >
+                      <Icon name="plus" className="btn-icon" style={{ width: 12, height: 12 }} />
+                      {lang === "pt" ? "Nova subcategoria" : "New subcategory"}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           );
