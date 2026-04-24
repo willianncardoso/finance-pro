@@ -13,14 +13,15 @@ function computeStats(txns: Txn[]) {
   const thisM = ym(now);
   const prevM = ym(new Date(now.getFullYear(), now.getMonth() - 1, 1));
 
-  const thisMo = txns.filter(t => t.d.startsWith(thisM));
-  const prevMo = txns.filter(t => t.d.startsWith(prevM));
+  const active = txns.filter(t => !t.exclude);
+  const thisMo = active.filter(t => t.d.startsWith(thisM));
+  const prevMo = active.filter(t => t.d.startsWith(prevM));
 
   const income = thisMo.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
   const expense = Math.abs(thisMo.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
   const prevExpense = Math.abs(prevMo.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
-  const incomeAll = txns.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
-  const expenseAll = Math.abs(txns.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
+  const incomeAll = active.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
+  const expenseAll = Math.abs(active.filter(t => t.amt < 0).reduce((s, t) => s + t.amt, 0));
 
   const byCat: Record<string, number> = {};
   const prevByCat: Record<string, number> = {};
@@ -31,9 +32,9 @@ function computeStats(txns: Txn[]) {
     .map(([k, cur]) => ({ k, cur, prev: prevByCat[k] || 0, budget: 0 }))
     .sort((a, b) => b.cur - a.cur);
 
-  // Monthly cashflow (last 12 months)
+  // Monthly cashflow (last 12 months) — excluded txns not counted
   const byMonth: Record<string, { income: number; expense: number }> = {};
-  txns.forEach(t => {
+  active.forEach(t => {
     const m = t.d.slice(0, 7);
     if (!byMonth[m]) byMonth[m] = { income: 0, expense: 0 };
     if (t.amt > 0) byMonth[m].income += t.amt;
@@ -112,6 +113,7 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   const [selCat, setSelCat] = useState('');
   const [editDueAcct, setEditDueAcct] = useState<string | null>(null);
   const [dueInputVal, setDueInputVal] = useState('');
+  const [dupDismissed, setDupDismissed] = useState(false);
 
   if (!effective.length) return (
     <div className="page">
@@ -157,17 +159,27 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
     sortBy === 'amount' ? Math.abs(b.amt) - Math.abs(a.amt) : b.d.localeCompare(a.d)
   );
 
-  // Per-account totals — exclude transfer (card payments) from income display
+  // Per-account totals — excluded txns and excluded-reimb not counted
   const acctSummary = allAccts.map(name => {
     const rows = inMonth.filter(tx => tx.acct === name);
-    const expense = rows.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
-    const refunds = rows.filter(tx => tx.amt > 0 && tx.cat !== 'transfer').reduce((s, tx) => s + tx.amt, 0);
-    return { name, expense, refunds, count: rows.filter(tx => tx.amt < 0).length };
-  }).filter(a => a.expense > 0).sort((a, b) => b.expense - a.expense);
+    const expense = rows.filter(tx => tx.amt < 0 && !tx.exclude).reduce((s, tx) => s + Math.abs(tx.amt), 0);
+    const refunds = rows.filter(tx => tx.amt > 0 && tx.cat !== 'transfer' && !tx.excludeReimb).reduce((s, tx) => s + tx.amt, 0);
+    return { name, expense, refunds, count: rows.filter(tx => tx.amt < 0 && !tx.exclude).length };
+  }).filter(a => a.expense > 0 || a.count > 0).sort((a, b) => b.expense - a.expense);
 
-  // Totals (expenses only; genuine refunds separately; card payments excluded from display)
-  const totalExpense = filtered.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
-  const totalRefunds = filtered.filter(tx => tx.amt > 0 && tx.cat !== 'transfer').reduce((s, tx) => s + tx.amt, 0);
+  // Totals (expenses only; genuine refunds separately)
+  const totalExpense = filtered.filter(tx => tx.amt < 0 && !tx.exclude).reduce((s, tx) => s + Math.abs(tx.amt), 0);
+  const totalRefunds = filtered.filter(tx => tx.amt > 0 && tx.cat !== 'transfer' && !tx.excludeReimb).reduce((s, tx) => s + tx.amt, 0);
+
+  // Duplicate detection: same acct + date + amount appearing more than once
+  const dupMap: Record<string, string[]> = {};
+  effective.forEach(tx => {
+    if (!tx.id) return;
+    const key = `${tx.acct}|${tx.d}|${tx.amt.toFixed(2)}`;
+    dupMap[key] = [...(dupMap[key] ?? []), tx.id];
+  });
+  const dupGroups = Object.entries(dupMap).filter(([, ids]) => ids.length > 1);
+  const dupTxns = dupGroups.flatMap(([, ids]) => ids.slice(1).map(id => effective.find(t => t.id === id)!).filter(Boolean));
 
   // Month navigation
   const mIdx = months.indexOf(selMonth);
@@ -181,6 +193,32 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
 
   return (
     <div className="page">
+      {/* ── Duplicate alert ────────────────────────────────────────── */}
+      {dupTxns.length > 0 && !dupDismissed && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px', marginBottom: 12, background: '#f59e0b14', border: '1.5px solid #f59e0b50', borderRadius: 10 }}>
+          <Icon name="alert" style={{ width: 18, height: 18, stroke: '#b45309', strokeWidth: 2, flexShrink: 0, marginTop: 1 }} className="" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#92400e' }}>
+              {pt ? `${dupTxns.length} transação(ões) possivelmente duplicada(s) detectada(s)` : `${dupTxns.length} possible duplicate transaction(s) detected`}
+            </div>
+            <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>
+              {dupTxns.slice(0, 3).map(tx => `${tx.d} · ${tx.merch} · ${tx.amt < 0 ? '-' : '+'}R$${Math.abs(tx.amt).toFixed(2).replace('.', ',')}`).join(' | ')}
+              {dupTxns.length > 3 ? ` e mais ${dupTxns.length - 3}…` : ''}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              {dupTxns.slice(0, 5).map(tx => (
+                <button key={tx.id} className="btn sm" style={{ fontSize: 11, padding: '2px 8px', borderColor: '#f59e0b80' }}
+                  onClick={() => (window as any).__openTxnEdit?.(tx)}>
+                  {tx.merch.slice(0, 18)}…
+                </button>
+              ))}
+              <button className="btn ghost sm" style={{ fontSize: 11, marginLeft: 'auto' }} onClick={() => setDupDismissed(true)}>
+                {pt ? 'Dispensar' : 'Dismiss'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div className="page-head">
         <div>
@@ -588,6 +626,19 @@ const PIPE_DELAYS = [800, 1200, 1600]; // ms for steps 1→2, 2→3, 3→4
 /* ── Universal categorizer ──────────────────────────────────────── */
 function catFor(text: string, amt: number): { cat: string; sub: string } {
   const s = text.toLowerCase();
+
+  // Check user-learned rules first (saved via EditDrawer category corrections)
+  try {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('fp_learned_rules') : null;
+    if (stored) {
+      const rules: Array<{ merch: string; cat: string; sub: string }> = JSON.parse(stored);
+      const norm = s.replace(/[^a-z0-9]/g, '');
+      for (const r of rules) {
+        const rNorm = r.merch.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (rNorm.length >= 4 && norm.includes(rNorm)) return { cat: r.cat, sub: r.sub };
+      }
+    }
+  } catch {}
 
   if (amt > 0) {
     if (/salari|folha|holerite|remuner|payroll/.test(s)) return { cat: 'income', sub: 'Salário' };
@@ -1190,6 +1241,9 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAcct
   const [imageData, setImageData] = useState<{ base64: string; mediaType: string } | null>(null);
   const [isPasteMode, setIsPasteMode] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  const [historySort, setHistorySort] = useState<'recent' | 'name'>('recent');
+  const [editingHistId, setEditingHistId] = useState<string | null>(null);
+  const [editingHistName, setEditingHistName] = useState('');
 
   useEffect(() => {
     try {
@@ -1780,6 +1834,14 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAcct
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{pt ? 'Histórico de importações' : 'Import history'}</h3>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className={'btn ghost sm' + (historySort === 'recent' ? ' primary' : '')} style={{ fontSize: 11 }} onClick={() => setHistorySort('recent')}>
+              {pt ? 'Recentes' : 'Recent'}
+            </button>
+            <button className={'btn ghost sm' + (historySort === 'name' ? ' primary' : '')} style={{ fontSize: 11 }} onClick={() => setHistorySort('name')}>
+              {pt ? 'A–Z' : 'A–Z'}
+            </button>
+          </div>
         </div>
         {history.length === 0 ? (
           <EmptyState
@@ -1789,37 +1851,71 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAcct
           />
         ) : (
           <div>
-            {history.map((h, i) => (
-              <div key={h.id ?? i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                <div style={{ width: 30, height: 30, borderRadius: 7, background: h.kind === 'account' ? 'var(--bg-3)' : 'var(--accent-bg)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                  <Icon name={h.kind === 'account' ? 'bank' : 'card'} style={{ width: 14, height: 14, stroke: h.kind === 'account' ? 'var(--ink-3)' : 'var(--accent-fg)' }} className="" />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{h.when}{h.fmt ? ` · ${h.fmt}` : ''}</div>
-                </div>
-                <span className="pill" style={{ flexShrink: 0 }}>{h.count} {pt ? 'tx' : 'tx'}</span>
-                {h.txnIds && h.txnIds.length > 0 && onDeleteBatch && (
-                  <button
-                    className="btn ghost sm"
-                    style={{ padding: '4px 6px', color: 'var(--danger, #ef4444)', flexShrink: 0 }}
-                    title={pt ? 'Excluir este lote' : 'Delete this batch'}
-                    onClick={() => {
-                      const msg = pt
-                        ? `Excluir as ${h.count} transações de "${h.name}"? Esta ação não pode ser desfeita.`
-                        : `Delete the ${h.count} transactions from "${h.name}"? This cannot be undone.`;
-                      if (!confirm(msg)) return;
-                      onDeleteBatch(h.txnIds!);
-                      const newHist = history.filter((_, j) => j !== i);
-                      setHistory(newHist);
-                      try { localStorage.setItem('fp_imports', JSON.stringify(newHist)); } catch {}
-                    }}
-                  >
-                    <Icon name="trash" style={{ width: 13, height: 13, stroke: 'currentColor' }} className="" />
-                  </button>
-                )}
-              </div>
-            ))}
+            {[...history]
+              .sort((a, b) => historySort === 'name' ? a.name.localeCompare(b.name) : 0)
+              .map((h, i) => {
+                const isEditing = editingHistId === (h.id ?? String(i));
+                const saveHistName = () => {
+                  const v = editingHistName.trim();
+                  if (v && v !== h.name) {
+                    const newHist = history.map(x => (x.id ?? '') === (h.id ?? '') ? { ...x, name: v } : x);
+                    setHistory(newHist);
+                    try { localStorage.setItem('fp_imports', JSON.stringify(newHist)); } catch {}
+                  }
+                  setEditingHistId(null);
+                };
+                return (
+                  <div key={h.id ?? i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                    <div style={{ width: 30, height: 30, borderRadius: 7, background: h.kind === 'account' ? 'var(--bg-3)' : 'var(--accent-bg)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                      <Icon name={h.kind === 'account' ? 'bank' : 'card'} style={{ width: 14, height: 14, stroke: h.kind === 'account' ? 'var(--ink-3)' : 'var(--accent-fg)' }} className="" />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          className="field"
+                          style={{ fontSize: 12, padding: '2px 6px', width: '100%' }}
+                          value={editingHistName}
+                          onChange={e => setEditingHistName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') saveHistName(); if (e.key === 'Escape') setEditingHistId(null); }}
+                          onBlur={saveHistName}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</div>
+                      )}
+                      <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{h.when}{h.fmt ? ` · ${h.fmt}` : ''}</div>
+                    </div>
+                    <span className="pill" style={{ flexShrink: 0 }}>{h.count} {pt ? 'tx' : 'tx'}</span>
+                    <button
+                      className="btn ghost sm"
+                      style={{ padding: '4px 6px', opacity: 0.5, flexShrink: 0 }}
+                      title={pt ? 'Renomear' : 'Rename'}
+                      onClick={() => { setEditingHistId(h.id ?? String(i)); setEditingHistName(h.name); }}
+                    >
+                      <Icon name="tag" style={{ width: 12, height: 12, stroke: 'currentColor' }} className="" />
+                    </button>
+                    {h.txnIds && h.txnIds.length > 0 && onDeleteBatch && (
+                      <button
+                        className="btn ghost sm"
+                        style={{ padding: '4px 6px', color: 'var(--danger, #ef4444)', flexShrink: 0 }}
+                        title={pt ? 'Excluir este lote' : 'Delete this batch'}
+                        onClick={() => {
+                          const msg = pt
+                            ? `Excluir as ${h.count} transações de "${h.name}"? Esta ação não pode ser desfeita.`
+                            : `Delete the ${h.count} transactions from "${h.name}"? This cannot be undone.`;
+                          if (!confirm(msg)) return;
+                          onDeleteBatch(h.txnIds!);
+                          const newHist = history.filter((_, j) => j !== i);
+                          setHistory(newHist);
+                          try { localStorage.setItem('fp_imports', JSON.stringify(newHist)); } catch {}
+                        }}
+                      >
+                        <Icon name="trash" style={{ width: 13, height: 13, stroke: 'currentColor' }} className="" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         )}
       </div>
@@ -2222,29 +2318,85 @@ export function BudgetPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
 
 
 /* ============ ACCOUNTS ============ */
+type AcctPeriod = 'week' | 'month' | '3months' | 'year' | 'all';
+
+function payMethod(tx: Txn, pt: boolean): { label: string; color: string } {
+  const m = tx.merch.toLowerCase();
+  if (tx.cat === 'transfer') {
+    if (/pix/.test(m)) return { label: 'PIX', color: '#22c55e' };
+    if (/ted|doc/.test(m)) return { label: 'TED', color: '#3b82f6' };
+    return { label: pt ? 'Transf.' : 'Transfer', color: '#6366f1' };
+  }
+  if (tx.kind === 'card') return { label: pt ? 'Crédito' : 'Credit', color: '#8b5cf6' };
+  if (tx.amt > 0) {
+    if (/pix/.test(m)) return { label: 'PIX', color: '#22c55e' };
+    if (/salari|salário/.test(m)) return { label: pt ? 'Salário' : 'Salary', color: '#10b981' };
+    return { label: pt ? 'Crédito' : 'Credit', color: '#10b981' };
+  }
+  if (/pix/.test(m)) return { label: 'PIX', color: '#f59e0b' };
+  if (/débito|debito|cartao deb/.test(m)) return { label: pt ? 'Débito' : 'Debit', color: '#f97316' };
+  return { label: pt ? 'Débito' : 'Debit', color: 'var(--ink-3)' };
+}
+
 export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEditTxn?: (tx: Txn) => void; txns?: Txn[] }) {
   const t = I18N[lang];
+  const pt = lang === 'pt';
+  const [period, setPeriod] = useState<AcctPeriod>('month');
+  const [selAcct, setSelAcct] = useState('all');
+  const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
 
   if (!txns.length) return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_accounts}</h1>
-          <div className="page-sub">{lang === "pt" ? "Sem dados importados" : "No data imported"}</div>
+          <div className="page-sub">{pt ? "Sem dados importados" : "No data imported"}</div>
         </div>
         <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{lang === "pt" ? "Importar extrato" : "Import statement"}
+          <Icon name="upload" className="btn-icon" />{pt ? "Importar extrato" : "Import statement"}
         </button>
       </div>
-      <EmptyState icon="bank" title={lang === "pt" ? "Nenhuma conta ainda" : "No accounts yet"} sub={lang === "pt" ? "Importe um extrato bancário para ver suas contas e transações aqui." : "Import a bank statement to see your accounts and transactions here."} cta={lang === "pt" ? "Importar extrato" : "Import statement"} onCta={() => (window as any).__navigate?.("import")} />
+      <EmptyState icon="bank" title={pt ? "Nenhuma conta ainda" : "No accounts yet"} sub={pt ? "Importe um extrato bancário para ver suas contas e transações aqui." : "Import a bank statement to see your accounts and transactions here."} cta={pt ? "Importar extrato" : "Import statement"} onCta={() => (window as any).__navigate?.("import")} />
     </div>
   );
 
-  // Derive accounts summary from real txns
-  const acctMap: Record<string, number> = {};
-  txns.forEach(tx => { acctMap[tx.acct] = (acctMap[tx.acct] ?? 0) + tx.amt; });
-  const accounts = Object.entries(acctMap).map(([name, balance]) => ({ name, balance }));
-  const totalBalance = accounts.reduce((s, a) => s + a.balance, 0);
+  // Period filter
+  const now = new Date();
+  const cutoff: string | null = (() => {
+    if (period === 'all') return null;
+    const d = new Date(now);
+    if (period === 'week') d.setDate(d.getDate() - 7);
+    else if (period === 'month') d.setDate(d.getDate() - 30);
+    else if (period === '3months') d.setDate(d.getDate() - 90);
+    else d.setDate(d.getDate() - 365);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const periodTxns = cutoff ? txns.filter(tx => tx.d >= cutoff) : txns;
+  const acctTxns = selAcct === 'all' ? periodTxns : periodTxns.filter(tx => tx.acct === selAcct);
+  const searchedTxns = search.trim()
+    ? acctTxns.filter(tx => tx.merch.toLowerCase().includes(search.toLowerCase()) || tx.acct.toLowerCase().includes(search.toLowerCase()))
+    : acctTxns;
+  const displayTxns = [...searchedTxns].sort((a, b) => sortDir === 'desc' ? b.d.localeCompare(a.d) : a.d.localeCompare(b.d));
+
+  // Account summaries (from period-filtered txns)
+  const allAccts = [...new Set(txns.map(tx => tx.acct))].sort();
+  const acctMap: Record<string, { in: number; out: number }> = {};
+  periodTxns.forEach(tx => {
+    if (!acctMap[tx.acct]) acctMap[tx.acct] = { in: 0, out: 0 };
+    if (tx.amt > 0) acctMap[tx.acct].in += tx.amt;
+    else acctMap[tx.acct].out += Math.abs(tx.amt);
+  });
+  const accounts = Object.entries(acctMap).map(([name, v]) => ({ name, ...v, net: v.in - v.out })).sort((a, b) => b.out - a.out);
+
+  const PERIOD_LABELS: Record<AcctPeriod, string> = {
+    week: pt ? 'Semana' : 'Week',
+    month: pt ? 'Mês' : 'Month',
+    '3months': pt ? '3 meses' : '3 months',
+    year: pt ? 'Ano' : 'Year',
+    all: pt ? 'Tudo' : 'All',
+  };
 
   return (
     <div className="page">
@@ -2252,60 +2404,108 @@ export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEdi
         <div>
           <h1 className="page-title">{t.nav_accounts}</h1>
           <div className="page-sub">
-            {accounts.length} {lang === "pt" ? "contas · saldo consolidado" : "accounts · consolidated balance"}{" "}
-            <span className="num">{fmtMoney(totalBalance, lang, true)}</span>
+            {displayTxns.length} {pt ? "transações" : "transactions"} · {pt ? "período:" : "period:"} {PERIOD_LABELS[period]}
           </div>
         </div>
         <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{lang === "pt" ? "Importar extrato" : "Import statement"}
+          <Icon name="upload" className="btn-icon" />{pt ? "Importar" : "Import"}
         </button>
       </div>
 
-      <div className="grid g-3" style={{ marginBottom: 14 }}>
-        {accounts.map((a, i) => (
-          <div key={i} className="card card-pad" style={{ position: "relative", overflow: "hidden" }}>
-            <div style={{ position: "absolute", top: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: "var(--ink)", opacity: 0.05 }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--ink)", display: "grid", placeItems: "center", color: "var(--bg)", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                {a.name.slice(0, 2).toUpperCase()}
-              </div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
-            </div>
-            <div className="num privacy-mask" style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em" }}>{fmtMoney(a.balance, lang, true)}</div>
-          </div>
+      {/* Period filter */}
+      <div className="seg" style={{ marginBottom: 12, fontSize: 12 }}>
+        {(Object.keys(PERIOD_LABELS) as AcctPeriod[]).map(p => (
+          <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{PERIOD_LABELS[p]}</button>
         ))}
       </div>
 
+      {/* Account chips */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, overflowX: 'auto', paddingBottom: 2 }}>
+        <button className={'btn sm' + (selAcct === 'all' ? ' primary' : '')} onClick={() => setSelAcct('all')}>
+          {pt ? 'Todas as contas' : 'All accounts'}
+        </button>
+        {accounts.map(a => (
+          <button key={a.name} className={'btn sm' + (selAcct === a.name ? ' primary' : '')} onClick={() => setSelAcct(selAcct === a.name ? 'all' : a.name)} style={{ flexShrink: 0 }}>
+            {a.name}
+            {selAcct !== a.name && <span style={{ marginLeft: 5, fontSize: 10, opacity: 0.6 }}>{fmtMoney(a.out, lang, true)}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* Summary cards */}
+      {selAcct !== 'all' && acctMap[selAcct] && (
+        <div className="grid g-3" style={{ marginBottom: 14 }}>
+          <div className="card card-pad">
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Entradas' : 'Income'}</div>
+            <div className="num pos" style={{ fontSize: 18, fontWeight: 700 }}>+{fmtMoney(acctMap[selAcct].in, lang, true)}</div>
+          </div>
+          <div className="card card-pad">
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Saídas' : 'Expenses'}</div>
+            <div className="num" style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>{fmtMoney(acctMap[selAcct].out, lang, true)}</div>
+          </div>
+          <div className="card card-pad">
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Saldo período' : 'Period balance'}</div>
+            {(() => { const net = acctMap[selAcct].in - acctMap[selAcct].out; return (
+              <div className={'num' + (net >= 0 ? ' pos' : '')} style={{ fontSize: 18, fontWeight: 700 }}>
+                {net >= 0 ? '+' : ''}{fmtMoney(net, lang, true)}
+              </div>
+            ); })()}
+          </div>
+        </div>
+      )}
+
+      {/* Transaction table */}
       <div className="card">
         <div className="card-head">
-          <h3 className="card-title">{t.section_recent}</h3>
-          <span className="chip-sm">{txns.length}</span>
+          <h3 className="card-title">{pt ? 'Transações' : 'Transactions'}</h3>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              placeholder={pt ? 'Buscar…' : 'Search…'}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="field"
+              style={{ height: 28, fontSize: 12, padding: '0 8px', width: 140 }}
+            />
+            <button className="btn ghost sm" onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')} title={pt ? 'Inverter ordem' : 'Toggle sort'}>
+              <Icon name={sortDir === 'desc' ? 'arrow_down' : 'arrow_up'} className="btn-icon" />
+            </button>
+            <span className="chip-sm">{displayTxns.length}</span>
+          </div>
         </div>
         <table className="t">
           <thead><tr>
-            <th>{lang === "pt" ? "Data" : "Date"}</th>
-            <th>{lang === "pt" ? "Descrição" : "Description"}</th>
-            <th>{lang === "pt" ? "Categoria" : "Category"}</th>
-            <th>{lang === "pt" ? "Conta" : "Account"}</th>
-            <th className="r">{lang === "pt" ? "Valor" : "Amount"}</th>
+            <th>{pt ? "Data" : "Date"}</th>
+            <th>{pt ? "Descrição" : "Description"}</th>
+            <th>{pt ? "Tipo" : "Type"}</th>
+            <th>{pt ? "Categoria" : "Category"}</th>
+            {selAcct === 'all' && <th>{pt ? "Conta" : "Account"}</th>}
+            <th className="r">{pt ? "Valor" : "Amount"}</th>
           </tr></thead>
           <tbody>
-            {txns.map((tx, i) => (
-              <tr key={i} style={{ cursor: "pointer" }} onClick={() => onEditTxn?.(tx)}>
-                <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
-                <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                <td>
-                  <span className="pill">
-                    <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
-                    {I18N[lang].categories[tx.cat] ?? tx.cat}
-                  </span>
-                </td>
-                <td className="muted" style={{ fontSize: 11.5 }}>{tx.acct}</td>
-                <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
-                  {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
-                </td>
-              </tr>
-            ))}
+            {displayTxns.map((tx, i) => {
+              const pm = payMethod(tx, pt);
+              return (
+                <tr key={i} style={{ cursor: "pointer", opacity: tx.exclude ? 0.45 : 1 }} onClick={() => onEditTxn?.(tx)}>
+                  <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
+                  <td style={{ fontWeight: 500, textDecoration: tx.exclude ? 'line-through' : 'none' }}>{tx.merch}</td>
+                  <td>
+                    <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 4, padding: '1px 6px', background: pm.color + '18', color: pm.color, border: `1px solid ${pm.color}40`, whiteSpace: 'nowrap' }}>
+                      {pm.label}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="pill">
+                      <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
+                      {I18N[lang].categories[tx.cat] ?? tx.cat}
+                    </span>
+                  </td>
+                  {selAcct === 'all' && <td className="muted" style={{ fontSize: 11.5 }}>{tx.acct}</td>}
+                  <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
+                    {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

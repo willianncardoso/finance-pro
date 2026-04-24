@@ -423,7 +423,7 @@ export default function Home() {
         {route === "categories" && <CategoriesPage lang={state.lang} txns={txns} />}
         {route === "compare" && <ComparisonPage lang={state.lang} txns={txns} />}
         {route === "projection" && <ProjectionPage lang={state.lang} />}
-        {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} />}
+        {route === "recurring" && <RecurringPage lang={state.lang} hasData={hasData} txns={txns} onEditTxn={t => setEditTxn(t)} />}
         {route === "settings" && <SettingsPage lang={state.lang} />}
         {route === "vault" && <VaultPage lang={state.lang} />}
       </main>

@@ -592,6 +592,7 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
     txn?.reimburseReceived ? 'received' : txn?.reimbursable ? 'pending' : 'none'
   );
   const [reimbAmt, setReimbAmt] = useState(txn?.reimbAmt ? String(txn.reimbAmt) : "");
+  const [excludeReimb, setExcludeReimb] = useState(txn?.excludeReimb ?? false);
   const [learnRule, setLearnRule] = useState(true);
   const [split, setSplit] = useState(false);
   const [splitAmt, setSplitAmt] = useState("");
@@ -607,6 +608,7 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
       setNotes(txn.notes ?? "");
       setRecurring(txn.recurring ?? false);
       setExclude(txn.exclude ?? false);
+      setExcludeReimb(txn.excludeReimb ?? false);
       setReimbStage(txn.reimburseReceived ? 'received' : txn.reimbursable ? 'pending' : 'none');
       setReimbAmt(txn.reimbAmt ? String(txn.reimbAmt) : "");
       setLearnRule(true);
@@ -623,10 +625,26 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
 
   function handleSave() {
     const reimbAmt_ = parseFloat(reimbAmt);
+
+    // Save learned rule when category changed and learnRule is enabled
+    if (learnRule && txn && (txn.cat !== cat || txn.sub !== sub)) {
+      try {
+        const stored = localStorage.getItem('fp_learned_rules');
+        const rules: Array<{ merch: string; cat: string; sub: string }> = stored ? JSON.parse(stored) : [];
+        const normMerch = merch.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const existingIdx = rules.findIndex(r => r.merch.toLowerCase().replace(/[^a-z0-9]/g, '') === normMerch);
+        const newRule = { merch, cat, sub: sub || cat };
+        if (existingIdx >= 0) rules[existingIdx] = newRule;
+        else rules.unshift(newRule);
+        localStorage.setItem('fp_learned_rules', JSON.stringify(rules.slice(0, 200)));
+      } catch {}
+    }
+
     onSave({
       ...txn!, cat, sub, merch,
       amt: txn!.amt < 0 ? -parseFloat(amt) : parseFloat(amt),
       notes, recurring, exclude,
+      excludeReimb: exclude && reimbStage !== 'none' ? excludeReimb || undefined : undefined,
       reimbursable: reimbStage === 'pending' || undefined,
       reimburseReceived: reimbStage === 'received' || undefined,
       reimbAmt: reimbStage !== 'none' && !isNaN(reimbAmt_) && reimbAmt_ > 0 ? reimbAmt_ : undefined,
@@ -803,6 +821,16 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
                     )}
                   </div>
                 )}
+                {/* When excluded from report AND has reimbursement, offer to exclude from reimbursement total too */}
+                {exclude && reimbStage !== 'none' && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, padding: '8px 10px', background: 'var(--bg-3)', borderRadius: 7 }}>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 500 }}>{lang === 'pt' ? 'Também excluir do reembolso' : 'Also exclude from reimbursement'}</div>
+                      <div style={{ fontSize: 10, color: 'var(--ink-3)' }}>{lang === 'pt' ? 'Não conta no total de reembolsos pendentes/recebidos' : 'Not counted in pending/received reimbursement totals'}</div>
+                    </div>
+                    <button className={"toggle" + (excludeReimb ? " on" : "")} onClick={() => setExcludeReimb(!excludeReimb)} />
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -881,43 +909,137 @@ export function ProjectionPage({ lang }: ProjectionPageProps) {
 interface RecurringPageProps {
   lang: Lang;
   hasData?: boolean;
+  txns?: Txn[];
+  onEditTxn?: (tx: Txn) => void;
 }
-export function RecurringPage({ lang, hasData = false }: RecurringPageProps) {
+
+function detectInstallments(txns: Txn[]): Array<{ merch: string; cat: string; sub: string; acct: string; amt: number; current: number; total: number; txnId?: string }> {
+  const groups: Record<string, { merch: string; cat: string; sub: string; acct: string; amt: number; maxTotal: number; maxCurrent: number; txnId?: string }> = {};
+  for (const tx of txns) {
+    if (!tx.installment) continue;
+    const m = tx.installment.match(/^(\d+)\/(\d+)$/);
+    if (!m) continue;
+    const cur = parseInt(m[1], 10);
+    const tot = parseInt(m[2], 10);
+    const key = `${tx.merch.toLowerCase().replace(/[^a-z0-9]/g, '')}|${tx.acct}|${tot}`;
+    const existing = groups[key];
+    if (!existing || cur > existing.maxCurrent) {
+      groups[key] = { merch: tx.merch, cat: tx.cat, sub: tx.sub ?? '', acct: tx.acct, amt: tx.amt, maxCurrent: cur, maxTotal: tot, txnId: tx.id };
+    }
+  }
+  return Object.values(groups).map(g => ({ merch: g.merch, cat: g.cat, sub: g.sub, acct: g.acct, amt: g.amt, current: g.maxCurrent, total: g.maxTotal, txnId: g.txnId })).sort((a, b) => a.merch.localeCompare(b.merch));
+}
+
+function detectRecurring(txns: Txn[]): Array<{ merch: string; cat: string; sub: string; acct: string; amt: number; months: number; txnId?: string }> {
+  // Group by normalized merchant name
+  const groups: Record<string, Txn[]> = {};
+  for (const tx of txns) {
+    if (tx.cat === 'transfer' || tx.amt >= 0) continue;
+    const key = tx.merch.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(tx);
+  }
+  const result: Array<{ merch: string; cat: string; sub: string; acct: string; amt: number; months: number; txnId?: string }> = [];
+  for (const [, txs] of Object.entries(groups)) {
+    if (txs.length < 2) continue;
+    const monthsSet = new Set(txs.map(t => t.d.slice(0, 7)));
+    if (monthsSet.size < 2) continue;
+    // Amount variance < 15%
+    const amts = txs.map(t => Math.abs(t.amt));
+    const avg = amts.reduce((s, a) => s + a, 0) / amts.length;
+    const maxVariance = Math.max(...amts.map(a => Math.abs(a - avg) / avg));
+    if (maxVariance > 0.15) continue;
+    const latest = txs.sort((a, b) => b.d.localeCompare(a.d))[0];
+    result.push({ merch: latest.merch, cat: latest.cat, sub: latest.sub ?? '', acct: latest.acct, amt: latest.amt, months: monthsSet.size, txnId: latest.id });
+  }
+  return result.sort((a, b) => a.merch.localeCompare(b.merch));
+}
+
+export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps) {
+  const pt = lang === "pt";
   const [tab, setTab] = useState<"recurring" | "installments">("recurring");
+
+  const installments = detectInstallments(txns);
+  const recurring = detectRecurring(txns);
+
+  const current = tab === "recurring" ? recurring : installments;
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{I18N[lang].nav_recurring}</h1>
-          <p className="page-sub">{lang === "pt" ? "Assinaturas e parcelamentos ativos" : "Active subscriptions and installments"}</p>
+          <p className="page-sub">
+            {tab === "recurring"
+              ? `${recurring.length} ${pt ? "detectado(s) automaticamente" : "detected automatically"}`
+              : `${installments.length} ${pt ? "parcelamento(s) ativo(s)" : "active installment(s)"}`}
+          </p>
         </div>
-        <button className="btn primary sm"
-          onClick={() => (window as any).__toast?.(lang === "pt" ? "Novo recorrente: em breve" : "New recurring: coming soon", "warn")}>
-          <Icon name="plus" className="btn-icon" />
-          <span>{lang === "pt" ? "Novo recorrente" : "New recurring"}</span>
-        </button>
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button className={"btn sm" + (tab === "recurring" ? " primary" : "")} onClick={() => setTab("recurring")}>
-          {lang === "pt" ? "Recorrentes" : "Recurring"}
+          {pt ? "Recorrentes" : "Recurring"} {recurring.length > 0 && <span className="chip-sm" style={{ marginLeft: 4 }}>{recurring.length}</span>}
         </button>
         <button className={"btn sm" + (tab === "installments" ? " primary" : "")} onClick={() => setTab("installments")}>
-          {lang === "pt" ? "Parcelamentos" : "Installments"}
+          {pt ? "Parcelamentos" : "Installments"} {installments.length > 0 && <span className="chip-sm" style={{ marginLeft: 4 }}>{installments.length}</span>}
         </button>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
-        <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
-        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
-          {tab === "recurring"
-            ? (lang === "pt" ? "Nenhum recorrente cadastrado" : "No recurring items yet")
-            : (lang === "pt" ? "Nenhum parcelamento ativo" : "No installments yet")}
+
+      {current.length === 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "72px 24px", textAlign: "center" }}>
+          <Icon name="refresh" style={{ width: 44, height: 44, stroke: "var(--ink-3)", strokeWidth: 1.1, marginBottom: 16 }} className="" />
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>
+            {tab === "recurring" ? (pt ? "Nenhum recorrente detectado" : "No recurring items detected") : (pt ? "Nenhum parcelamento ativo" : "No installments yet")}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
+            {tab === "recurring"
+              ? (pt ? "Transações com o mesmo estabelecimento em 2+ meses são detectadas como recorrentes." : "Transactions with the same merchant in 2+ months are detected as recurring.")
+              : (pt ? "Parcelamentos são detectados ao importar faturas de cartão com campos de parcela (ex: 3/12)." : "Installments are detected when importing card bills with installment fields (e.g. 3/12).")}
+          </div>
         </div>
-        <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 320, lineHeight: 1.65 }}>
-          {tab === "recurring"
-            ? (lang === "pt" ? "Recorrentes são detectados automaticamente ao importar transações." : "Recurring items are detected automatically when you import transactions.")
-            : (lang === "pt" ? "Parcelamentos são detectados ao importar faturas de cartão." : "Installments are detected when you import credit card bills.")}
+      ) : (
+        <div className="card">
+          {tab === "installments" ? (
+            (installments as typeof installments).map((item, i) => {
+              const pct = item.total > 0 ? (item.current / item.total) * 100 : 0;
+              const remaining = item.total - item.current;
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < installments.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
+                  onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{item.acct} · {item.sub || item.cat}</div>
+                    <div style={{ marginTop: 6, height: 4, background: "var(--bg-3)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent-fg)", borderRadius: 2 }} />
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 3 }}>
+                      {pt ? `${item.current}/${item.total} parcelas · ${remaining} restante(s)` : `${item.current}/${item.total} installments · ${remaining} remaining`}
+                    </div>
+                  </div>
+                  <div className="num" style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                    {fmtMoney(item.amt, lang)}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            (recurring as typeof recurring).map((item, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < recurring.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
+                onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                    {item.acct} · {item.sub || item.cat} · {item.months} {pt ? "meses" : "months"}
+                  </div>
+                </div>
+                <div className="num" style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                  {fmtMoney(item.amt, lang)}
+                </div>
+              </div>
+            ))
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
