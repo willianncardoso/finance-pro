@@ -476,9 +476,12 @@ function parseBRLNum(s: string): number {
 }
 
 /* ── Format detection ───────────────────────────────────────────── */
-type CsvFormat = 'c6' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic';
+type CsvFormat = 'c6' | 'c6fatura' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic' | 'numbers';
 
 function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep: string; headerIdx: number } {
+  // Apple Numbers / ZIP format (binary) — cannot parse as CSV
+  if (content.startsWith('PK')) return { fmt: 'numbers', sep: ',', headerIdx: -1 };
+
   const fn = filename.toLowerCase();
   const lines = cleanLines(content);
   const headSample = lines.slice(0, 8).join('\n').toLowerCase();
@@ -492,27 +495,34 @@ function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep:
   const headerLineIdx = lines.findIndex(l => l.trim().length > 0);
   const rawHeader = headerLineIdx >= 0 ? lines[headerLineIdx] : '';
   const sep = detectSep(rawHeader);
-  const headerCols = splitLine(rawHeader, sep).map(c => c.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  const headerCols = splitLine(rawHeader, sep).map(c => norm(c));
 
-  // C6: has columns like data, saldo, titulo, descricao, entrada, saida
+  // C6 Fatura (credit card bill): has "Data de Compra" + "Final do Cartão" or "Cotação"
+  const hasDataCompra = headerCols.some(c => c.includes('datacompra') || c.includes('dtcompra'));
+  const hasFinalCartao = headerCols.some(c => c.includes('finalcartao') || c.includes('finalcard') || c.includes('finalc') || c.includes('final'));
+  const hasCotacao = headerCols.some(c => c.includes('cotacao') || c.includes('cotac'));
+  const hasValorRS = headerCols.some(c => (c.includes('valor') && (c.includes('rs') || c.endsWith('r$') || c === 'valorr' || c.includes('valorr'))));
+  if (hasDataCompra || (hasFinalCartao && hasCotacao) || (hasFinalCartao && hasValorRS)) {
+    return { fmt: 'c6fatura', sep, headerIdx: headerLineIdx };
+  }
+
+  // C6 Extrato (bank statement): has Entrada + Saída
   const hasEntrada = headerCols.some(c => c.includes('entrada'));
-  const hasSaida = headerCols.some(c => c.includes('saida') || c.includes('saída'));
-  const hasData = headerCols.some(c => c === 'data' || c.startsWith('data'));
-  const hasTitulo = headerCols.some(c => c.includes('titulo') || c.includes('título'));
+  const hasSaida = headerCols.some(c => c.includes('saida'));
   if (hasEntrada && hasSaida) return { fmt: 'c6', sep, headerIdx: headerLineIdx };
 
-  // Nubank: date/data + category/categoria + title/titulo + amount/valor
+  // Nubank: date/data + title + amount (3 columns) or date + category + title + amount (4)
   const hasDate = headerCols.some(c => c === 'date' || c === 'data');
   const hasAmt = headerCols.some(c => c === 'amount' || c === 'valor');
-  const hasCat = headerCols.some(c => c === 'category' || c === 'categoria');
   const hasTitle = headerCols.some(c => c === 'title' || c === 'titulo');
-  if (hasDate && hasAmt && (hasCat || hasTitle)) return { fmt: 'nubank', sep, headerIdx: headerLineIdx };
+  if (hasDate && hasAmt && hasTitle) return { fmt: 'nubank', sep, headerIdx: headerLineIdx };
 
   // Inter / Bradesco fallbacks
   if (headSample.includes('inter bank') || headSample.includes('banco inter')) return { fmt: 'inter', sep, headerIdx: headerLineIdx };
   if (headSample.includes('bradesco')) return { fmt: 'bradesco', sep, headerIdx: headerLineIdx };
 
-  // Heuristic: first data line has DD/MM/YYYY pattern → likely C6 or similar
+  // Heuristic: first data line has DD/MM/YYYY → likely C6 extrato
   const firstDataLine = lines.find(l => /\d{2}\/\d{2}\/\d{4}/.test(l));
   if (firstDataLine) return { fmt: 'c6', sep: detectSep(firstDataLine), headerIdx: headerLineIdx };
 
