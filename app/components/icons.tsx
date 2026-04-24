@@ -37,6 +37,8 @@ const ICONS: Record<string, string> = {
   zap: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
   dollar: "M12 1v22 M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6",
   external: "M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6 M15 3h6v6 M10 14L21 3",
+  trash: "M3 6h18M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6 M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2",
+  bank: "M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 10v11M12 10v11M16 10v11",
 };
 
 interface IconProps {

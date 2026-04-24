@@ -81,114 +81,182 @@ function monthLabel(ym: string, lang: Lang): string {
   return d.toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', { month: 'long', year: 'numeric' });
 }
 
+// Card accent colors per known issuers
+function cardAccent(acct: string): string {
+  const a = acct.toLowerCase();
+  if (a.includes('nubank')) return '#820ad1';
+  if (a.includes('c6')) return '#1a1a1a';
+  if (a.includes('itaú') || a.includes('itau')) return '#ec7000';
+  if (a.includes('bradesco')) return '#cc0000';
+  if (a.includes('inter')) return '#ff7a00';
+  if (a.includes('xp')) return '#000';
+  return 'var(--accent)';
+}
+
 export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
   const t = I18N[lang];
   const pt = lang === 'pt';
-  const months = availableMonths(txns);
+
+  // Only show credit card transactions; fall back to all if none tagged
+  const cardTxns = txns.filter(tx => tx.kind === 'card');
+  const effective = cardTxns.length > 0 ? cardTxns : txns.filter(tx => tx.kind !== 'account');
+
+  const months = availableMonths(effective);
   const [selMonth, setSelMonth] = useState(months[0] ?? '');
   const [selAcct, setSelAcct] = useState('all');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'date' | 'amount'>('date');
 
-  // Sync selMonth when txns change (e.g. first import)
   useEffect(() => {
     if (!selMonth && months.length > 0) setSelMonth(months[0]);
   }, [months.length]);
 
-  if (!txns.length) return (
+  if (!effective.length) return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
-          <div className="page-sub">{pt ? "Sem transações importadas" : "No transactions imported yet"}</div>
+          <div className="page-sub">{pt ? "Nenhuma fatura importada" : "No card statements imported"}</div>
         </div>
         <button className="btn primary sm" onClick={() => (window as any).__navigate?.("import")}>
           <Icon name="upload" className="btn-icon" />{pt ? "Importar fatura" : "Import statement"}
         </button>
       </div>
-      <EmptyState icon="card" title={pt ? "Nenhuma fatura ainda" : "No statements yet"} sub={pt ? "Importe uma fatura CSV do seu cartão (C6, Nubank, OFX…) para ver seus gastos aqui." : "Import a credit card statement (CSV, OFX…) to see your spending here."} cta={pt ? "Importar fatura" : "Import statement"} onCta={() => (window as any).__navigate?.("import")} />
+      <EmptyState
+        icon="card"
+        title={pt ? "Nenhuma fatura ainda" : "No statements yet"}
+        sub={pt ? "Importe uma fatura CSV do C6 ou Nubank para ver seus gastos aqui." : "Import a C6 or Nubank CSV statement to see your card spending here."}
+        cta={pt ? "Importar fatura" : "Import statement"}
+        onCta={() => (window as any).__navigate?.("import")}
+      />
     </div>
   );
 
-  // Accounts derived from txns
-  const allAccts = [...new Set(txns.map(t => t.acct))].sort();
+  // All unique accounts in card txns
+  const allAccts = [...new Set(effective.map(tx => tx.acct))].sort();
 
-  // Filtered by month and account
-  const inMonth = selMonth ? txns.filter(t => t.d.startsWith(selMonth)) : txns;
-  const inAcct = selAcct === 'all' ? inMonth : inMonth.filter(t => t.acct === selAcct);
-  const filtered = search
-    ? inAcct.filter(t => t.merch.toLowerCase().includes(search.toLowerCase()) || (t.cat + t.sub).toLowerCase().includes(search.toLowerCase()))
+  // Filtered pipeline
+  const inMonth = selMonth ? effective.filter(tx => tx.d.startsWith(selMonth)) : effective;
+  const inAcct = selAcct === 'all' ? inMonth : inMonth.filter(tx => tx.acct === selAcct);
+  const searched = search
+    ? inAcct.filter(tx => tx.merch.toLowerCase().includes(search.toLowerCase()) || (tx.cat + (tx.sub ?? '')).toLowerCase().includes(search.toLowerCase()))
     : inAcct;
+  const filtered = [...searched].sort((a, b) =>
+    sortBy === 'amount' ? Math.abs(a.amt) - Math.abs(b.amt) : b.d.localeCompare(a.d)
+  );
 
   // Per-account summary for selected month
   const acctSummary = allAccts.map(name => {
-    const rows = inMonth.filter(t => t.acct === name && t.amt < 0);
-    const total = rows.reduce((s, t) => s + Math.abs(t.amt), 0);
+    const rows = inMonth.filter(tx => tx.acct === name);
+    const expense = rows.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
+    const income = rows.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
     const count = rows.length;
-    return { name, total, count };
-  }).filter(a => a.count > 0).sort((a, b) => b.total - a.total);
+    return { name, expense, income, net: expense - income, count };
+  }).filter(a => a.count > 0).sort((a, b) => b.expense - a.expense);
 
-  // Category breakdown for filtered view
+  const totalExpense = filtered.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
+  const totalIncome = filtered.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
+
+  // Category breakdown
   const byCat: Record<string, number> = {};
-  inAcct.filter(t => t.amt < 0).forEach(t => { byCat[t.cat] = (byCat[t.cat] ?? 0) + Math.abs(t.amt); });
+  inAcct.filter(tx => tx.amt < 0).forEach(tx => { byCat[tx.cat] = (byCat[tx.cat] ?? 0) + Math.abs(tx.amt); });
   const catBreakdown = Object.entries(byCat).map(([k, v]) => ({ k, cur: v, prev: 0, budget: 0 })).sort((a, b) => b.cur - a.cur);
-
-  const totalExpense = filtered.filter(t => t.amt < 0).reduce((s, t) => s + Math.abs(t.amt), 0);
-  const totalIncome = filtered.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
 
   return (
     <div className="page">
+      {/* Header */}
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_cards}</h1>
-          <div className="page-sub">{selMonth ? monthLabel(selMonth, lang) : ''} · {allAccts.length} {pt ? 'cartões / contas' : 'cards / accounts'}</div>
+          <div className="page-sub">
+            {allAccts.length} {pt ? (allAccts.length === 1 ? 'cartão' : 'cartões') : (allAccts.length === 1 ? 'card' : 'cards')}
+            {selMonth ? ` · ${monthLabel(selMonth, lang)}` : ''}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn sm" onClick={() => (window as any).__modal?.('export', {})}>
-            <Icon name="download" className="btn-icon" />{pt ? 'Exportar' : 'Export'}
-          </button>
+          {/* Month nav arrows */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            <button
+              className="btn ghost sm"
+              style={{ borderRadius: 0, borderRight: '1px solid var(--border)', padding: '0 10px', height: 32 }}
+              disabled={months.indexOf(selMonth) >= months.length - 1}
+              onClick={() => { const i = months.indexOf(selMonth); if (i < months.length - 1) setSelMonth(months[i + 1]); }}
+            >‹</button>
+            <select value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{ border: 'none', background: 'transparent', fontSize: 12, fontWeight: 500, padding: '0 8px', height: 32, cursor: 'pointer', color: 'var(--ink)' }}>
+              {months.map(m => <option key={m} value={m}>{monthLabel(m, lang)}</option>)}
+            </select>
+            <button
+              className="btn ghost sm"
+              style={{ borderRadius: 0, borderLeft: '1px solid var(--border)', padding: '0 10px', height: 32 }}
+              disabled={months.indexOf(selMonth) <= 0}
+              onClick={() => { const i = months.indexOf(selMonth); if (i > 0) setSelMonth(months[i - 1]); }}
+            >›</button>
+          </div>
           <button className="btn primary sm" onClick={() => (window as any).__navigate?.('import')}>
-            <Icon name="upload" className="btn-icon" />{pt ? 'Importar fatura' : 'Import statement'}
+            <Icon name="upload" className="btn-icon" />{pt ? 'Importar' : 'Import'}
           </button>
         </div>
       </div>
 
-      {/* Account summary cards */}
-      {acctSummary.length > 0 && (
-        <div style={{ display: 'flex', gap: 10, marginBottom: 14, overflowX: 'auto', paddingBottom: 2 }}>
-          {/* "All" pill */}
-          <div
-            onClick={() => setSelAcct('all')}
-            style={{ flexShrink: 0, padding: '12px 16px', borderRadius: 10, border: `1.5px solid ${selAcct === 'all' ? 'var(--ink)' : 'var(--border)'}`, background: selAcct === 'all' ? 'var(--bg-3)' : 'var(--surface)', cursor: 'pointer', minWidth: 130 }}
-          >
-            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600 }}>{pt ? 'Todos' : 'All'}</div>
-            <div className="num privacy-mask" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{fmtMoney(acctSummary.reduce((s, a) => s + a.total, 0), lang, true)}</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'transações' : 'transactions'}</div>
+      {/* Card chips — one per account */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 18, overflowX: 'auto', paddingBottom: 4 }}>
+        {/* All */}
+        <div
+          onClick={() => setSelAcct('all')}
+          style={{
+            flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 150,
+            background: selAcct === 'all' ? 'var(--ink)' : 'var(--surface)',
+            border: `1.5px solid ${selAcct === 'all' ? 'var(--ink)' : 'var(--border)'}`,
+            color: selAcct === 'all' ? 'var(--surface)' : 'var(--ink)',
+            transition: 'background 0.15s, border-color 0.15s',
+          }}
+        >
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', opacity: 0.65, textTransform: 'uppercase', marginBottom: 8 }}>{pt ? 'Todos' : 'All cards'}</div>
+          <div className="num privacy-mask" style={{ fontSize: 20, fontWeight: 700 }}>
+            {fmtMoney(acctSummary.reduce((s, a) => s + a.expense, 0), lang, true)}
           </div>
-          {acctSummary.map(a => (
+          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 3 }}>
+            {acctSummary.reduce((s, a) => s + a.count, 0)} {pt ? 'transações' : 'transactions'}
+          </div>
+        </div>
+        {acctSummary.map(a => {
+          const accent = cardAccent(a.name);
+          const active = selAcct === a.name;
+          return (
             <div
               key={a.name}
-              onClick={() => setSelAcct(selAcct === a.name ? 'all' : a.name)}
-              style={{ flexShrink: 0, padding: '12px 16px', borderRadius: 10, border: `1.5px solid ${selAcct === a.name ? 'var(--ink)' : 'var(--border)'}`, background: selAcct === a.name ? 'var(--bg-3)' : 'var(--surface)', cursor: 'pointer', minWidth: 160 }}
+              onClick={() => setSelAcct(active ? 'all' : a.name)}
+              style={{
+                flexShrink: 0, cursor: 'pointer', borderRadius: 14, padding: '14px 18px', minWidth: 185,
+                background: active ? accent : 'var(--surface)',
+                border: `1.5px solid ${active ? accent : 'var(--border)'}`,
+                color: active ? '#fff' : 'var(--ink)',
+                transition: 'background 0.15s, border-color 0.15s',
+              }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--accent)', display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 700, color: 'white' }}>
-                  {a.name.slice(0, 2).toUpperCase()}
-                </div>
-                <span style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+              <div style={{ fontSize: 11, fontWeight: 600, opacity: active ? 0.8 : 1, marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+              <div className="num privacy-mask" style={{ fontSize: 20, fontWeight: 700 }}>
+                {fmtMoney(a.expense, lang, true)}
               </div>
-              <div className="num neg privacy-mask" style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(a.total, lang, true)}</div>
-              <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2 }}>{a.count} {pt ? 'transações' : 'transactions'}</div>
+              {a.income > 0 && (
+                <div style={{ fontSize: 10, opacity: 0.75, marginTop: 2 }}>
+                  estornos +{fmtMoney(a.income, lang, true)}
+                </div>
+              )}
+              <div style={{ fontSize: 11, opacity: 0.6, marginTop: 3 }}>
+                {a.count} {pt ? 'transações' : 'transactions'}
+              </div>
             </div>
-          ))}
-        </div>
-      )}
+          );
+        })}
+      </div>
 
+      {/* Summary row + category bars */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 14, marginBottom: 14 }}>
-        {/* Category breakdown */}
         <div className="card">
           <div className="card-head">
             <h3 className="card-title">{pt ? 'Gastos por categoria' : 'Spending by category'}</h3>
-            <span className="chip-sm">{selMonth ? monthLabel(selMonth, lang) : pt ? 'Total' : 'All time'}</span>
+            {selAcct !== 'all' && <span className="chip-sm" style={{ background: cardAccent(selAcct), color: '#fff' }}>{selAcct}</span>}
           </div>
           <div className="card-pad">
             {catBreakdown.length > 0
@@ -196,15 +264,14 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
               : <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>{pt ? 'Sem gastos neste período' : 'No expenses in this period'}</div>}
           </div>
         </div>
-        {/* Summary */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 180 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 170 }}>
           <div className="card card-pad">
             <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Total gasto' : 'Total spent'}</div>
             <div className="num neg privacy-mask" style={{ fontSize: 22, fontWeight: 700 }}>{fmtMoney(totalExpense, lang, true)}</div>
           </div>
           {totalIncome > 0 && (
             <div className="card card-pad">
-              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Créditos / estornos' : 'Credits / refunds'}</div>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-3)', fontWeight: 600, marginBottom: 4 }}>{pt ? 'Créditos' : 'Credits'}</div>
               <div className="num pos privacy-mask" style={{ fontSize: 22, fontWeight: 700 }}>+{fmtMoney(totalIncome, lang, true)}</div>
             </div>
           )}
@@ -215,40 +282,34 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
         </div>
       </div>
 
-      {/* Filters bar */}
+      {/* Filter bar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
           <Icon name="search" style={{ width: 13, height: 13, position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', stroke: 'var(--ink-3)' }} className="" />
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder={pt ? 'Buscar estabelecimento…' : 'Search merchant…'}
+            placeholder={pt ? 'Buscar estabelecimento ou categoria…' : 'Search merchant or category…'}
             style={{ width: '100%', paddingLeft: 30, paddingRight: 10, height: 34, border: '1px solid var(--border-2)', borderRadius: 8, fontSize: 13, background: 'var(--bg-2)', color: 'var(--ink)', boxSizing: 'border-box' }}
           />
         </div>
-        {months.length > 0 && (
-          <select
-            value={selMonth}
-            onChange={e => setSelMonth(e.target.value)}
-            className="field"
-            style={{ height: 34, fontSize: 13, padding: '0 10px', flexShrink: 0 }}
-          >
-            {months.map(m => <option key={m} value={m}>{monthLabel(m, lang)}</option>)}
-          </select>
-        )}
-        {selAcct !== 'all' && (
-          <button className="pill" style={{ cursor: 'pointer', background: 'var(--bg-3)', border: '1px solid var(--border)', padding: '4px 10px' }} onClick={() => setSelAcct('all')}>
-            {selAcct} ×
-          </button>
-        )}
-        {search && (
-          <button className="btn ghost sm" onClick={() => setSearch('')}>
-            {pt ? 'Limpar' : 'Clear'}
+        <select
+          value={sortBy}
+          onChange={e => setSortBy(e.target.value as 'date' | 'amount')}
+          className="field"
+          style={{ height: 34, fontSize: 12, padding: '0 10px', flexShrink: 0 }}
+        >
+          <option value="date">{pt ? 'Ordenar: data' : 'Sort: date'}</option>
+          <option value="amount">{pt ? 'Ordenar: valor' : 'Sort: amount'}</option>
+        </select>
+        {(search || selAcct !== 'all') && (
+          <button className="btn ghost sm" onClick={() => { setSearch(''); setSelAcct('all'); }}>
+            {pt ? 'Limpar filtros' : 'Clear filters'}
           </button>
         )}
       </div>
 
-      {/* Transactions table */}
+      {/* Transactions list — grouped by date */}
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{pt ? 'Transações' : 'Transactions'}</h3>
@@ -258,40 +319,56 @@ export function CardsPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
           <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
             {pt ? 'Nenhuma transação encontrada' : 'No transactions found'}
           </div>
-        ) : (
-          <table className="t">
-            <thead><tr>
-              <th>{pt ? 'Data' : 'Date'}</th>
-              <th>{pt ? 'Estabelecimento' : 'Merchant'}</th>
-              <th>{pt ? 'Categoria' : 'Category'}</th>
-              <th>{pt ? 'Conta' : 'Account'}</th>
-              <th>{pt ? 'Parcela' : 'Installment'}</th>
-              <th className="r">{pt ? 'Valor' : 'Amount'}</th>
-            </tr></thead>
-            <tbody>
-              {filtered.map((tx, i) => (
-                <tr key={i} onClick={() => (window as any).__openTxnEdit?.(tx)} style={{ cursor: 'pointer' }}>
-                  <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
-                  <td style={{ fontWeight: 500 }}>{tx.merch}</td>
-                  <td>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <span className="pill">
-                        <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
-                        {I18N[lang].categories[tx.cat] ?? tx.cat}
-                      </span>
-                      {tx.sub && <span style={{ fontSize: 10, color: 'var(--ink-4)', paddingLeft: 14 }}>{tx.sub}</span>}
+        ) : (() => {
+          // Group by date for display
+          const byDate: { date: string; rows: typeof filtered }[] = [];
+          filtered.forEach(tx => {
+            const last = byDate[byDate.length - 1];
+            if (last && last.date === tx.d) last.rows.push(tx);
+            else byDate.push({ date: tx.d, rows: [tx] });
+          });
+          return (
+            <div>
+              {byDate.map(({ date, rows }) => (
+                <div key={date}>
+                  <div style={{ padding: '8px 16px', fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', background: 'var(--bg-2)', borderBottom: '1px solid var(--border)', letterSpacing: '0.03em', textTransform: 'uppercase' }}>
+                    {fmtDate(date, lang)}
+                  </div>
+                  {rows.map((tx, ri) => (
+                    <div
+                      key={tx.id ?? ri}
+                      onClick={() => (window as any).__openTxnEdit?.(tx)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: ri < rows.length - 1 ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}
+                    >
+                      {/* Merchant avatar */}
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: cardAccent(tx.acct) + '22', display: 'grid', placeItems: 'center', flexShrink: 0, fontSize: 13, fontWeight: 700, color: cardAccent(tx.acct) }}>
+                        {tx.merch.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '?'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.merch}</div>
+                        <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                          <span className="pill" style={{ fontSize: 10 }}>
+                            <span className="cat-dot" style={{ background: CAT_COLORS[tx.cat] }} />
+                            {I18N[lang].categories[tx.cat] ?? tx.cat}
+                          </span>
+                          {allAccts.length > 1 && (
+                            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{tx.acct}</span>
+                          )}
+                          {tx.installment && (
+                            <span style={{ fontSize: 10, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>{tx.installment}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className={"num " + (tx.amt > 0 ? 'pos' : '')} style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                        {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
+                      </div>
                     </div>
-                  </td>
-                  <td className="muted" style={{ fontSize: 11 }}>{tx.acct}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-3)' }}>{tx.installment ?? '—'}</td>
-                  <td className={"r num " + (tx.amt > 0 ? 'pos' : '')} style={{ fontWeight: 600 }}>
-                    {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
-                  </td>
-                </tr>
+                  ))}
+                </div>
               ))}
-            </tbody>
-          </table>
-        )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -605,7 +682,7 @@ function parseC6CSV(content: string, acct = 'C6 Bank', sep = ',', hIdx = -1): Tx
     const amt = entradaV > 0 ? entradaV : -saidaV;
     const merch = c6Merchant(titulo, descricao);
     const { cat, sub } = catFor(`${titulo} ${descricao}`, amt);
-    txns.push({ id: newId(), d, merch, cat, sub, acct, amt });
+    txns.push({ id: newId(), d, merch, cat, sub, acct, amt, kind: 'account' });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -636,7 +713,7 @@ function parseNubankCSV(content: string, acct = 'Nubank', sep = ',', hIdx = -1):
     // Nubank credit card: positive = expense, negative = credit/refund
     const amt = -raw;
     const { cat, sub } = catFor(titulo, amt);
-    txns.push({ id: newId(), d: dateStr, merch: titulo, cat, sub, acct, amt });
+    txns.push({ id: newId(), d: dateStr, merch: titulo, cat, sub, acct, amt, kind: 'card' });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -695,7 +772,7 @@ function parseC6FaturaCSV(content: string, acct = 'C6 Bank', sep = ';', hIdx = -
       ? `${descricao} (${parcela})`
       : descricao;
     const { cat, sub } = catFor(`${descricao} ${categoria}`, amt);
-    txns.push({ id: newId(), d, merch: label || descricao || 'C6', cat, sub, acct: resolvedAcct, amt });
+    txns.push({ id: newId(), d, merch: label || descricao || 'C6', cat, sub, acct: resolvedAcct, amt, kind: 'card' });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -720,7 +797,7 @@ function parseOFX(content: string, acct = 'Importado'): Txn[] {
     if (isNaN(amtRaw)) continue;
     const merch = get('MEMO') || get('NAME') || get('FITID');
     const { cat, sub } = catFor(merch, amtRaw);
-    txns.push({ id: newId(), d, merch: merch.slice(0, 80), cat, sub, acct, amt: amtRaw });
+    txns.push({ id: newId(), d, merch: merch.slice(0, 80), cat, sub, acct, amt: amtRaw, kind: 'account' });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -749,7 +826,7 @@ function parseGenericCSV(content: string, acct = 'Importado', sep = ','): Txn[] 
     }
     if (!d || isNaN(amtRaw)) continue;
     const { cat, sub } = catFor(merch, amtRaw);
-    txns.push({ id: newId(), d, merch: merch || 'Desconhecido', cat, sub, acct, amt: amtRaw });
+    txns.push({ id: newId(), d, merch: merch || 'Desconhecido', cat, sub, acct, amt: amtRaw, kind: 'card' });
   }
   return txns.sort((a, b) => b.d.localeCompare(a.d));
 }
@@ -771,14 +848,14 @@ function parseFile(content: string, filename: string, acct?: string): { txns: Tx
   return { txns, fmt, rawHeader };
 }
 
-export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportComplete?: (txns: Txn[], mode: 'merge' | 'replace') => void }) {
+export function ImportPage({ lang, onImportComplete, onDeleteBatch }: { lang: Lang; onImportComplete?: (txns: Txn[], mode: 'merge' | 'replace') => void; onDeleteBatch?: (txnIds: string[]) => void }) {
   const t = I18N[lang];
   const pt = lang === 'pt';
   const [drag, setDrag] = useState(false);
   const [fileName, setFileName] = useState('');
   const [pipeStep, setPipeStep] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
-  const [history, setHistory] = useState<{ name: string; when: string; count: number; fmt: string }[]>([]);
+  const [history, setHistory] = useState<{ id?: string; name: string; when: string; count: number; fmt: string; kind?: 'card' | 'account'; txnIds?: string[] }[]>([]);
   const [rawContent, setRawContent] = useState('');
   const [detectedFmt, setDetectedFmt] = useState<CsvFormat>('generic');
   const [acctName, setAcctName] = useState('');
@@ -825,7 +902,7 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
               const result: Txn[] = raw.map(r => {
                 const { cat, sub } = catFor(r.merchant, r.amount);
                 const label = r.installment ? `${r.merchant} (${r.installment})` : r.merchant;
-                return { id: newId(), d: r.date, merch: label || r.merchant, cat, sub, acct: r.account || acctName || 'Screenshot', amt: r.amount };
+                return { id: newId(), d: r.date, merch: label || r.merchant, cat, sub, acct: r.account || acctName || 'Screenshot', amt: r.amount, kind: 'card' as const };
               }).filter(tx => tx.d && tx.amt !== 0);
               setParsedTxns(result);
               if (result.length === 0) {
@@ -964,10 +1041,13 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
         ? [`Mesclando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]
         : [`Merging ${count} transactions...`, `✓ Local database updated`, `✓ Done`])]);
       const entry = {
+        id: newId(),
         name: fileName,
         when: new Date().toLocaleDateString(pt ? 'pt-BR' : 'en-US', { day: '2-digit', month: 'short', year: 'numeric' }),
         count,
         fmt: fmtLabels[detectedFmt],
+        kind: (parsedTxns[0]?.kind ?? 'card') as 'card' | 'account',
+        txnIds: parsedTxns.map(t => t.id).filter(Boolean) as string[],
       };
       // Write localStorage DIRECTLY here — not inside a React state updater,
       // because the component may unmount (route change) before the updater runs.
@@ -1238,13 +1318,34 @@ export function ImportPage({ lang, onImportComplete }: { lang: Lang; onImportCom
         ) : (
           <div>
             {history.map((h, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                <Icon name="file" style={{ width: 15, height: 15, stroke: 'var(--accent-fg)' }} className="" />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500 }}>{h.name}</div>
+              <div key={h.id ?? i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < history.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ width: 30, height: 30, borderRadius: 7, background: h.kind === 'account' ? 'var(--bg-3)' : 'var(--accent-bg)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                  <Icon name={h.kind === 'account' ? 'bank' : 'card'} style={{ width: 14, height: 14, stroke: h.kind === 'account' ? 'var(--ink-3)' : 'var(--accent-fg)' }} className="" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</div>
                   <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{h.when}{h.fmt ? ` · ${h.fmt}` : ''}</div>
                 </div>
-                <span className="pill">{h.count} {pt ? 'transações' : 'transactions'}</span>
+                <span className="pill" style={{ flexShrink: 0 }}>{h.count} {pt ? 'tx' : 'tx'}</span>
+                {h.txnIds && h.txnIds.length > 0 && onDeleteBatch && (
+                  <button
+                    className="btn ghost sm"
+                    style={{ padding: '4px 6px', color: 'var(--danger, #ef4444)', flexShrink: 0 }}
+                    title={pt ? 'Excluir este lote' : 'Delete this batch'}
+                    onClick={() => {
+                      const msg = pt
+                        ? `Excluir as ${h.count} transações de "${h.name}"? Esta ação não pode ser desfeita.`
+                        : `Delete the ${h.count} transactions from "${h.name}"? This cannot be undone.`;
+                      if (!confirm(msg)) return;
+                      onDeleteBatch(h.txnIds!);
+                      const newHist = history.filter((_, j) => j !== i);
+                      setHistory(newHist);
+                      try { localStorage.setItem('fp_imports', JSON.stringify(newHist)); } catch {}
+                    }}
+                  >
+                    <Icon name="trash" style={{ width: 13, height: 13, stroke: 'currentColor' }} className="" />
+                  </button>
+                )}
               </div>
             ))}
           </div>

@@ -258,6 +258,10 @@ export default function Home() {
     setToast({ message: state.lang === "pt" ? "Transação salva" : "Transaction saved", kind: "success" });
   }
 
+  function handleDeleteBatch(txnIds: string[]) {
+    setTxns(prev => prev.filter(t => !txnIds.includes(t.id ?? '')));
+  }
+
   function handleImportComplete(newTxns: Txn[], mode: "merge" | "replace" = "merge") {
     if (mode === "replace") {
       setTxns(newTxns);
@@ -306,7 +310,7 @@ export default function Home() {
         )}
         {route === "cards" && <CardsPage lang={state.lang} txns={txns} />}
         {route === "invest" && <InvestPage lang={state.lang} txns={txns} />}
-        {route === "import" && <ImportPage lang={state.lang} onImportComplete={(txns, mode) => handleImportComplete(txns, mode)} />}
+        {route === "import" && <ImportPage lang={state.lang} onImportComplete={(txns, mode) => handleImportComplete(txns, mode)} onDeleteBatch={handleDeleteBatch} />}
         {route === "insights" && <InsightsPage lang={state.lang} txns={txns} />}
         {route === "reports" && <ReportsPage lang={state.lang} txns={txns} />}
         {route === "budget" && <BudgetPage lang={state.lang} txns={txns} />}
