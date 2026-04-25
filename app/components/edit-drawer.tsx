@@ -858,27 +858,53 @@ export function EditDrawer({ txn, lang, onClose, onSave }: EditDrawerProps) {
   );
 }
 
-interface ToastProps {
-  message: string;
-  kind?: "success" | "warn" | "danger";
-  onDismiss: () => void;
-}
-export function Toast({ message, kind = "success", onDismiss }: ToastProps) {
-  useEffect(() => {
-    const timer = setTimeout(onDismiss, 3200);
-    return () => clearTimeout(timer);
-  }, [message, onDismiss]);
+export type ToastKind = "success" | "warn" | "danger" | "info";
+export interface ToastItem { id: number; message: string; kind: ToastKind; dur?: number }
 
-  const iconMap = { success: "check", warn: "alert", danger: "alert" };
+function ToastSingle({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
+  const [leaving, setLeaving] = useState(false);
+  const dur = item.dur ?? 3500;
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setLeaving(true);
+      setTimeout(onDismiss, 220);
+    }, dur);
+    return () => clearTimeout(t);
+  }, [dur, onDismiss]);
+
+  const dismiss = () => { setLeaving(true); setTimeout(onDismiss, 220); };
+  const iconMap: Record<ToastKind, string> = { success: "check", warn: "alert", danger: "alert", info: "info" };
+
   return (
-    <div className={"toast " + kind}>
-      <Icon name={iconMap[kind]} style={{ width: 14, height: 14 }} className="" />
-      <span>{message}</span>
-      <button className="icon-btn" style={{ marginLeft: "auto" }} onClick={onDismiss}>
+    <div
+      className={"toast-item " + item.kind + (leaving ? " leaving" : "")}
+      style={{ "--toast-dur": dur + "ms" } as React.CSSProperties}
+    >
+      <Icon name={iconMap[item.kind]} style={{ width: 15, height: 15 }} className="toast-icon" />
+      <span style={{ flex: 1 }}>{item.message}</span>
+      <button className="toast-close" onClick={dismiss} aria-label="dismiss">
         <Icon name="x" style={{ width: 12, height: 12 }} className="" />
       </button>
+      <div className="toast-bar" />
     </div>
   );
+}
+
+export function ToastStack({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }) {
+  if (!toasts.length) return null;
+  return (
+    <div className="toast-stack">
+      {toasts.map(t => (
+        <ToastSingle key={t.id} item={t} onDismiss={() => onDismiss(t.id)} />
+      ))}
+    </div>
+  );
+}
+
+/** @deprecated use ToastStack */
+export function Toast({ message, kind = "success", onDismiss }: { message: string; kind?: ToastKind; onDismiss: () => void }) {
+  return <ToastStack toasts={[{ id: 0, message, kind }]} onDismiss={onDismiss} />;
 }
 
 interface ProjectionPageProps {

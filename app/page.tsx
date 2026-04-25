@@ -7,14 +7,14 @@ import {
   AccountsPage, CardsPage, InvestPage, ImportPage,
   InsightsPage, ReportsPage, BudgetPage, CategoriesPage, SettingsPage, ComparisonPage,
 } from "./components/pages";
-import { EditDrawer, Toast, ProjectionPage, RecurringPage, VaultPage } from "./components/edit-drawer";
+import { EditDrawer, ToastStack, ToastItem, ToastKind, ProjectionPage, RecurringPage, VaultPage } from "./components/edit-drawer";
 import { ModalRenderer, ModalState } from "./components/modals";
 import { Txn, newId, AppNotification, CardMeta } from "./lib/data";
 
 declare global {
   interface Window {
     __openTxnEdit?: (txn: Txn) => void;
-    __toast?: (message: string, kind?: "success" | "warn" | "danger") => void;
+    __toast?: (message: string, kind?: ToastKind) => void;
   }
 }
 
@@ -106,7 +106,8 @@ export default function Home() {
   const [route, setRoute] = useState("dashboard");
   const [tweaksVisible, setTweaksVisible] = useState(false);
   const [editTxn, setEditTxn] = useState<Txn | null>(null);
-  const [toast, setToast] = useState<{ message: string; kind: "success" | "warn" | "danger" } | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastIdRef = useRef(0);
   const [hydrated, setHydrated] = useState(false);
   const [txns, setTxns] = useState<Txn[]>([]);
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -224,9 +225,10 @@ export default function Home() {
     window.__openTxnEdit = (txn: Txn) => setEditTxn(txn);
     (window as any).__navigate = navigate;
 
-    (window as any).__toast = (message: string, kind: "success" | "warn" | "danger" = "success") => {
-      setToast({ message, kind });
-      addNotification(message, kind);
+    (window as any).__toast = (message: string, kind: ToastKind = "success") => {
+      const id = ++toastIdRef.current;
+      setToasts(prev => [...prev, { id, message, kind }]);
+      addNotification(message, kind === "success" ? "success" : kind === "danger" ? "danger" : "info");
     };
 
     (window as any).__modal = (type: string, data: Record<string, unknown> = {}) =>
@@ -345,7 +347,7 @@ export default function Home() {
       return [{ ...txn, id: newId() }, ...prev];
     });
     setEditTxn(null);
-    setToast({ message: state.lang === "pt" ? "Transação salva" : "Transaction saved", kind: "success" });
+    (window as any).__toast?.(state.lang === "pt" ? "Transação salva" : "Transaction saved", "success");
   }
 
   function handleDeleteBatch(txnIds: string[]) {
@@ -394,12 +396,12 @@ export default function Home() {
         return [...fresh, ...filteredPrev].sort((a, b) => b.d.localeCompare(a.d));
       });
     }
-    setToast({
-      message: state.lang === "pt"
+    (window as any).__toast?.(
+      state.lang === "pt"
         ? `${newTxns.length} transações importadas com sucesso`
         : `${newTxns.length} transactions imported successfully`,
-      kind: "success",
-    });
+      "success"
+    );
     navigate("cards");
   }
 
@@ -474,9 +476,7 @@ export default function Home() {
         onSave={handleSaveTxn}
       />
 
-      {toast && (
-        <Toast message={toast.message} kind={toast.kind} onDismiss={() => setToast(null)} />
-      )}
+      <ToastStack toasts={toasts} onDismiss={id => setToasts(prev => prev.filter(t => t.id !== id))} />
 
       <ModalRenderer
         modal={modal}

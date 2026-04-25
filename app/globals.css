@@ -917,6 +917,85 @@ select.field { appearance: none; cursor: pointer; }
   margin-top: 1px;
 }
 
+/* ============ Toast notifications ============ */
+@keyframes toast-in {
+  from { transform: translateX(calc(100% + 24px)); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+@keyframes toast-out {
+  from { transform: translateX(0); opacity: 1; max-height: 80px; margin-bottom: 0; }
+  to   { transform: translateX(calc(100% + 24px)); opacity: 0; max-height: 0; margin-bottom: -10px; }
+}
+@keyframes toast-progress {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+.toast-stack {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+  align-items: flex-end;
+}
+.toast-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 14px 14px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 240px;
+  max-width: 360px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.13), 0 1px 4px rgba(0,0,0,.08);
+  animation: toast-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  pointer-events: auto;
+  overflow: hidden;
+  line-height: 1.45;
+}
+.toast-item.leaving {
+  animation: toast-out 0.22s ease-in both;
+}
+.toast-item.success { background: var(--surface); color: var(--ink); border: 1px solid var(--border-2); }
+.toast-item.warn    { background: var(--warn-bg); color: var(--warn-fg); border: 1px solid color-mix(in oklch, var(--warn) 30%, transparent); }
+.toast-item.danger  { background: var(--danger-bg); color: var(--danger-fg); border: 1px solid color-mix(in oklch, var(--danger) 30%, transparent); }
+.toast-item.info    { background: var(--info-bg); color: var(--info-fg); border: 1px solid color-mix(in oklch, var(--info) 30%, transparent); }
+.toast-icon { flex-shrink: 0; margin-top: 1px; }
+.toast-item.success .toast-icon { color: var(--green); }
+.toast-item.warn    .toast-icon { color: var(--warn-fg); }
+.toast-item.danger  .toast-icon { color: var(--danger-fg); }
+.toast-item.info    .toast-icon { color: var(--info-fg); }
+.toast-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.5;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  line-height: 1;
+}
+.toast-close:hover { opacity: 1; }
+.toast-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2.5px;
+  width: 100%;
+  transform-origin: left;
+  animation: toast-progress var(--toast-dur, 3.5s) linear both;
+}
+.toast-item.success .toast-bar { background: var(--green); }
+.toast-item.warn    .toast-bar { background: var(--warn-fg); }
+.toast-item.danger  .toast-bar { background: var(--danger-fg); }
+.toast-item.info    .toast-bar { background: var(--info-fg); }
+
 /* ============ Import pipeline animations ============ */
 @keyframes pipe-pulse {
   0%, 100% { opacity: 1; }

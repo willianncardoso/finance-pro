@@ -113,7 +113,10 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   const [selCat, setSelCat] = useState('');
   const [editDueAcct, setEditDueAcct] = useState<string | null>(null);
   const [dueInputVal, setDueInputVal] = useState('');
-  const [dupDismissed, setDupDismissed] = useState(false);
+  // Collapsible sections
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggleSection = (key: string) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
+  const isOpen = (key: string) => !collapsed[key];
 
   if (!effective.length) return (
     <div className="page">
@@ -171,7 +174,20 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   const totalExpense = filtered.filter(tx => tx.amt < 0 && !tx.exclude).reduce((s, tx) => s + Math.abs(tx.amt), 0);
   const totalRefunds = filtered.filter(tx => tx.amt > 0 && tx.cat !== 'transfer' && !tx.excludeReimb).reduce((s, tx) => s + tx.amt, 0);
 
-  // Duplicate detection: same acct + date + amount appearing more than once
+  // ── Smart alerts ─────────────────────────────────────────────────
+  // Dismissed alert IDs are stored in localStorage so they don't reappear
+  const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('fp_card_alerts_dismissed') ?? '[]')); } catch { return new Set(); }
+  });
+  const dismissAlert = (id: string) => {
+    setDismissedAlerts(prev => {
+      const next = new Set([...prev, id]);
+      try { localStorage.setItem('fp_card_alerts_dismissed', JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+
+  // 1) Duplicate detection: same acct + date + amount appearing more than once
   const dupMap: Record<string, string[]> = {};
   effective.forEach(tx => {
     if (!tx.id) return;
@@ -180,6 +196,45 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   });
   const dupGroups = Object.entries(dupMap).filter(([, ids]) => ids.length > 1);
   const dupTxns = dupGroups.flatMap(([, ids]) => ids.slice(1).map(id => effective.find(t => t.id === id)!).filter(Boolean));
+  const dupAlertId = `dup_${dupTxns.map(t => t.id).sort().join(',')}`;
+
+  // 2) Uncategorized transactions (cat === 'other')
+  const uncatTxns = effective.filter(tx => tx.amt < 0 && !tx.exclude && tx.cat === 'other');
+  const uncatAlertId = `uncat_${uncatTxns.map(t => t.id).sort().join(',')}`;
+
+  // 3) Large one-off expenses (>R$500, not installment, not recurring)
+  const avgAmt = effective.filter(tx => tx.amt < 0).length > 0
+    ? effective.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0) / effective.filter(tx => tx.amt < 0).length
+    : 0;
+  const largeTxns = effective.filter(tx => tx.amt < 0 && !tx.exclude && !tx.installment && !tx.recurring && Math.abs(tx.amt) > Math.max(500, avgAmt * 2.5));
+  const largeAlertId = `large_${largeTxns.map(t => t.id).sort().join(',')}`;
+
+  // 4) Possible subscriptions not marked recurring (same merchant, same amount, 2+ months, not yet marked)
+  const potentialSubs: { merch: string; amt: number }[] = [];
+  const subGroups: Record<string, Txn[]> = {};
+  effective.filter(tx => tx.amt < 0 && !tx.recurring && !tx.installment).forEach(tx => {
+    const k = `${tx.merch.toLowerCase().replace(/[^a-z0-9]/g, '')}|${tx.amt.toFixed(2)}`;
+    if (!subGroups[k]) subGroups[k] = [];
+    subGroups[k].push(tx);
+  });
+  Object.values(subGroups).forEach(list => {
+    if (list.length < 2) return;
+    const mos = new Set(list.map(t => t.d.slice(0, 7)));
+    if (mos.size < 2) return;
+    potentialSubs.push({ merch: list[0].merch, amt: Math.abs(list[0].amt) });
+  });
+  const subAlertId = `sub_${potentialSubs.map(s => s.merch).sort().join(',')}`;
+
+  type Alert = { id: string; kind: 'warn' | 'info' | 'danger'; title: string; body: string; txns?: Txn[]; extra?: React.ReactNode };
+  const alerts: Alert[] = [];
+  if (dupTxns.length > 0 && !dismissedAlerts.has(dupAlertId))
+    alerts.push({ id: dupAlertId, kind: 'warn', title: pt ? `${dupTxns.length} transação(ões) duplicada(s)` : `${dupTxns.length} possible duplicate(s)`, body: dupTxns.slice(0, 3).map(tx => `${tx.d} · ${tx.merch} · R$${Math.abs(tx.amt).toFixed(2).replace('.', ',')}`).join(' | ') + (dupTxns.length > 3 ? ` +${dupTxns.length - 3}` : ''), txns: dupTxns.slice(0, 5) });
+  if (uncatTxns.length > 0 && !dismissedAlerts.has(uncatAlertId))
+    alerts.push({ id: uncatAlertId, kind: 'info', title: pt ? `${uncatTxns.length} transação(ões) sem categoria` : `${uncatTxns.length} uncategorized transaction(s)`, body: uncatTxns.slice(0, 3).map(tx => tx.merch).join(', ') + (uncatTxns.length > 3 ? `…` : ''), txns: uncatTxns.slice(0, 5) });
+  if (largeTxns.length > 0 && !dismissedAlerts.has(largeAlertId))
+    alerts.push({ id: largeAlertId, kind: 'warn', title: pt ? `${largeTxns.length} gasto(s) elevado(s) detectado(s)` : `${largeTxns.length} unusually large transaction(s)`, body: largeTxns.slice(0, 3).map(tx => `${tx.merch} · R$${Math.abs(tx.amt).toFixed(2).replace('.', ',')}`).join(' | '), txns: largeTxns.slice(0, 5) });
+  if (potentialSubs.length > 0 && !dismissedAlerts.has(subAlertId))
+    alerts.push({ id: subAlertId, kind: 'info', title: pt ? `${potentialSubs.length} possível(is) assinatura(s) não marcada(s)` : `${potentialSubs.length} possible subscription(s) not marked recurring`, body: potentialSubs.slice(0, 4).map(s => `${s.merch} · R$${s.amt.toFixed(2).replace('.', ',')}/mês`).join(' | ') });
 
   // Future installments: group all installment txns by merchant+card+total, compute remaining months
   const instGroups: Record<string, { merch: string; acct: string; amt: number; current: number; total: number; lastDate: string }> = {};
@@ -224,32 +279,36 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
 
   return (
     <div className="page">
-      {/* ── Duplicate alert ────────────────────────────────────────── */}
-      {dupTxns.length > 0 && !dupDismissed && (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px', marginBottom: 12, background: '#f59e0b14', border: '1.5px solid #f59e0b50', borderRadius: 10 }}>
-          <Icon name="alert" style={{ width: 18, height: 18, stroke: '#b45309', strokeWidth: 2, flexShrink: 0, marginTop: 1 }} className="" />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#92400e' }}>
-              {pt ? `${dupTxns.length} transação(ões) possivelmente duplicada(s) detectada(s)` : `${dupTxns.length} possible duplicate transaction(s) detected`}
+      {/* ── Smart alerts ────────────────────────────────────────────── */}
+      {alerts.map(alert => {
+        const colors = {
+          warn:   { bg: 'var(--warn-bg)',   border: 'color-mix(in oklch, var(--warn) 30%, transparent)',   text: 'var(--warn-fg)',   icon: 'alert' },
+          info:   { bg: 'var(--info-bg)',   border: 'color-mix(in oklch, var(--info) 30%, transparent)',   text: 'var(--info-fg)',   icon: 'info' },
+          danger: { bg: 'var(--danger-bg)', border: 'color-mix(in oklch, var(--danger) 30%, transparent)', text: 'var(--danger-fg)', icon: 'alert' },
+        }[alert.kind];
+        return (
+          <div key={alert.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px', marginBottom: 10, background: colors.bg, border: `1.5px solid ${colors.border}`, borderRadius: 10 }}>
+            <Icon name={colors.icon as 'alert' | 'info'} style={{ width: 16, height: 16, stroke: colors.text, strokeWidth: 2, flexShrink: 0, marginTop: 2 }} className="" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>{alert.title}</div>
+              <div style={{ fontSize: 11, color: colors.text, opacity: 0.8, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alert.body}</div>
+              {alert.txns && alert.txns.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                  {alert.txns.map(tx => (
+                    <button key={tx.id} className="btn sm" style={{ fontSize: 11, padding: '2px 8px' }}
+                      onClick={() => (window as any).__openTxnEdit?.(tx)}>
+                      {tx.merch.slice(0, 20)}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>
-              {dupTxns.slice(0, 3).map(tx => `${tx.d} · ${tx.merch} · ${tx.amt < 0 ? '-' : '+'}R$${Math.abs(tx.amt).toFixed(2).replace('.', ',')}`).join(' | ')}
-              {dupTxns.length > 3 ? ` e mais ${dupTxns.length - 3}…` : ''}
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-              {dupTxns.slice(0, 5).map(tx => (
-                <button key={tx.id} className="btn sm" style={{ fontSize: 11, padding: '2px 8px', borderColor: '#f59e0b80' }}
-                  onClick={() => (window as any).__openTxnEdit?.(tx)}>
-                  {tx.merch.slice(0, 18)}…
-                </button>
-              ))}
-              <button className="btn ghost sm" style={{ fontSize: 11, marginLeft: 'auto' }} onClick={() => setDupDismissed(true)}>
-                {pt ? 'Dispensar' : 'Dismiss'}
-              </button>
-            </div>
+            <button className="btn ghost sm" style={{ fontSize: 11, flexShrink: 0 }} onClick={() => dismissAlert(alert.id)}>
+              × {pt ? 'Ignorar' : 'Dismiss'}
+            </button>
           </div>
-        </div>
-      )}
+        );
+      })}
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div className="page-head">
         <div>
@@ -408,11 +467,14 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
       {/* ── Future installments table ───────────────────────────────── */}
       {futureMonths.length > 0 && (
         <div className="card" style={{ marginBottom: 14 }}>
-          <div className="card-head">
+          <div className="card-head" style={{ cursor: 'pointer' }} onClick={() => toggleSection('future')}>
             <h3 className="card-title">{pt ? 'Parcelas futuras' : 'Future installments'}</h3>
-            <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{pt ? 'Estimativa por fatura' : 'Estimated per statement'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{pt ? 'Estimativa por fatura' : 'Estimated per statement'}</span>
+              <Icon name={isOpen('future') ? 'chevron_up' : 'chevron_down'} style={{ width: 14, height: 14, stroke: 'var(--ink-3)' }} className="" />
+            </div>
           </div>
-          <div style={{ overflowX: 'auto' }}>
+          {isOpen('future') && <div style={{ overflowX: 'auto' }}>
             <table className="t">
               <thead>
                 <tr>
@@ -443,25 +505,26 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
                 })}
               </tbody>
             </table>
-          </div>
+          </div>}
         </div>
       )}
 
       {/* ── Category breakdown — DonutChart + interactive legend ───── */}
       {catBreakdown.length > 0 && (
         <div className="card" style={{ marginBottom: 14 }}>
-          <div className="card-head">
+          <div className="card-head" style={{ cursor: 'pointer' }} onClick={() => toggleSection('cats')}>
             <h3 className="card-title">{pt ? 'Gastos por categoria' : 'Spending by category'}</h3>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               {selCat && (
-                <button className="btn ghost sm" style={{ fontSize: 11 }} onClick={() => setSelCat('')}>
+                <button className="btn ghost sm" style={{ fontSize: 11 }} onClick={e => { e.stopPropagation(); setSelCat(''); }}>
                   × {I18N[lang].categories[selCat] ?? selCat}
                 </button>
               )}
               <span className="chip-sm">{selAcct !== 'all' ? selAcct : selMonth ? monthLabel(selMonth, lang) : pt ? 'todos' : 'all'}</span>
+              <Icon name={isOpen('cats') ? 'chevron_up' : 'chevron_down'} style={{ width: 14, height: 14, stroke: 'var(--ink-3)' }} className="" />
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 0, padding: '16px', alignItems: 'flex-start' }}>
+          {isOpen('cats') && <div style={{ display: 'flex', gap: 0, padding: '16px', alignItems: 'flex-start' }}>
             {/* Donut */}
             <div style={{ position: 'relative', flexShrink: 0, marginRight: 20 }}>
               <DonutChart
@@ -512,7 +575,7 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
                 );
               })}
             </div>
-          </div>
+          </div>}
         </div>
       )}
 
@@ -536,16 +599,17 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
 
       {/* ── Transactions ───────────────────────────────────────────── */}
       <div className="card">
-        <div className="card-head">
+        <div className="card-head" style={{ cursor: 'pointer' }} onClick={() => toggleSection('txns')}>
           <h3 className="card-title">
             {selCat ? (I18N[lang].categories[selCat] ?? selCat) : (pt ? 'Transações' : 'Transactions')}
           </h3>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {hasFilters && <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{pt ? 'filtrado' : 'filtered'}</span>}
             <span className="chip-sm">{filtered.filter(tx => tx.amt < 0).length}</span>
+            <Icon name={isOpen('txns') ? 'chevron_up' : 'chevron_down'} style={{ width: 14, height: 14, stroke: 'var(--ink-3)' }} className="" />
           </div>
         </div>
-        {filtered.length === 0 ? (
+        {isOpen('txns') && (filtered.length === 0 ? (
           <div style={{ padding: '40px 16px', textAlign: 'center' }}>
             <div style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 12 }}>{pt ? 'Nenhuma transação encontrada' : 'No transactions found'}</div>
             {hasFilters && <button className="btn ghost sm" onClick={clearFilters}>{pt ? 'Limpar filtros' : 'Clear filters'}</button>}
@@ -579,7 +643,7 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
               </div>
             );
           })()
-        )}
+        ))}
       </div>
     </div>
   );
@@ -2708,8 +2772,6 @@ export function BudgetPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }) {
 
 
 /* ============ ACCOUNTS ============ */
-type AcctPeriod = 'week' | 'month' | '3months' | 'year' | 'all';
-
 function payMethod(tx: Txn, pt: boolean): { label: string; color: string } {
   const m = tx.merch.toLowerCase();
   if (tx.cat === 'transfer') {
@@ -2731,151 +2793,241 @@ function payMethod(tx: Txn, pt: boolean): { label: string; color: string } {
 export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEditTxn?: (tx: Txn) => void; txns?: Txn[] }) {
   const t = I18N[lang];
   const pt = lang === 'pt';
-  const [period, setPeriod] = useState<AcctPeriod>('month');
+
+  // Only account-type txns — credit card individual purchases stay in CardsPage
+  const baseTxns = txns.filter(tx => !tx.kind || tx.kind === 'account');
+
+  // ── Filter state ────────────────────────────────────────────────
+  const [viewMode, setViewMode] = useState<'month' | 'year' | 'all'>('month');
+  const [selMonth, setSelMonth] = useState('');
+  const [selYear, setSelYear] = useState('');
   const [selAcct, setSelAcct] = useState('all');
+  const [dirFilter, setDirFilter] = useState<'all' | 'in' | 'out'>('all');
+  const [selCat, setSelCat] = useState('');
+  const [selType, setSelType] = useState('');
   const [search, setSearch] = useState('');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
 
-  if (!txns.length) return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <h1 className="page-title">{t.nav_accounts}</h1>
-          <div className="page-sub">{pt ? "Sem dados importados" : "No data imported"}</div>
-        </div>
-        <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{pt ? "Importar extrato" : "Import statement"}
-        </button>
-      </div>
-      <EmptyState icon="bank" title={pt ? "Nenhuma conta ainda" : "No accounts yet"} sub={pt ? "Importe um extrato bancário para ver suas contas e transações aqui." : "Import a bank statement to see your accounts and transactions here."} cta={pt ? "Importar extrato" : "Import statement"} onCta={() => (window as any).__navigate?.("import")} />
-    </div>
-  );
+  const allMonths = availableMonths(baseTxns);
+  const allYears  = [...new Set(allMonths.map(m => m.slice(0, 4)))].sort().reverse();
 
-  // Period filter
-  const now = new Date();
-  const cutoff: string | null = (() => {
-    if (period === 'all') return null;
-    const d = new Date(now);
-    if (period === 'week') d.setDate(d.getDate() - 7);
-    else if (period === 'month') d.setDate(d.getDate() - 30);
-    else if (period === '3months') d.setDate(d.getDate() - 90);
-    else d.setDate(d.getDate() - 365);
-    return d.toISOString().slice(0, 10);
-  })();
+  // Auto-select the most recent month once data is available
+  useEffect(() => {
+    if (!allMonths.length) return;
+    const thisM = new Date().toISOString().slice(0, 7);
+    setSelMonth(allMonths.includes(thisM) ? thisM : allMonths[0]);
+    setSelYear(allMonths[0].slice(0, 4));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allMonths.join(',')]);
 
-  const periodTxns = cutoff ? txns.filter(tx => tx.d >= cutoff) : txns;
-  const acctTxns = selAcct === 'all' ? periodTxns : periodTxns.filter(tx => tx.acct === selAcct);
-  const searchedTxns = search.trim()
-    ? acctTxns.filter(tx => tx.merch.toLowerCase().includes(search.toLowerCase()) || tx.acct.toLowerCase().includes(search.toLowerCase()))
-    : acctTxns;
-  const displayTxns = [...searchedTxns].sort((a, b) => sortDir === 'desc' ? b.d.localeCompare(a.d) : a.d.localeCompare(b.d));
+  // Month navigation
+  const mIdx = allMonths.indexOf(selMonth);
+  const goOlderMonth = () => { if (mIdx < allMonths.length - 1) setSelMonth(allMonths[mIdx + 1]); };
+  const goNewerMonth = () => { if (mIdx > 0) setSelMonth(allMonths[mIdx - 1]); };
 
-  // Account summaries (from period-filtered txns)
-  const allAccts = [...new Set(txns.map(tx => tx.acct))].sort();
+  // ── Filtering pipeline ──────────────────────────────────────────
+  const periodTxns = viewMode === 'month' && selMonth
+    ? baseTxns.filter(tx => tx.d.startsWith(selMonth))
+    : viewMode === 'year' && selYear
+    ? baseTxns.filter(tx => tx.d.startsWith(selYear))
+    : baseTxns;
+
+  const inAcct = selAcct === 'all' ? periodTxns : periodTxns.filter(tx => tx.acct === selAcct);
+  const inDir  = dirFilter === 'all' ? inAcct : dirFilter === 'in' ? inAcct.filter(tx => tx.amt > 0) : inAcct.filter(tx => tx.amt < 0);
+  const inCat  = selCat   ? inDir.filter(tx => tx.cat === selCat)   : inDir;
+  const inType = selType  ? inCat.filter(tx => payMethod(tx, pt).label === selType) : inCat;
+  const searched = search.trim()
+    ? inType.filter(tx => tx.merch.toLowerCase().includes(search.toLowerCase()))
+    : inType;
+  const displayTxns = [...searched].sort((a, b) => sortDir === 'desc' ? b.d.localeCompare(a.d) : a.d.localeCompare(b.d));
+
+  // ── Derived sets for filter chips ───────────────────────────────
+  const availTypes = [...new Set(inAcct.map(tx => payMethod(tx, pt).label))].sort();
+  const availCats  = [...new Set(inAcct.map(tx => tx.cat))].sort();
+
+  // ── Account summaries (per-period) ─────────────────────────────
+  const allAccts = [...new Set(baseTxns.map(tx => tx.acct))].sort();
   const acctMap: Record<string, { in: number; out: number }> = {};
   periodTxns.forEach(tx => {
     if (!acctMap[tx.acct]) acctMap[tx.acct] = { in: 0, out: 0 };
     if (tx.amt > 0) acctMap[tx.acct].in += tx.amt;
     else acctMap[tx.acct].out += Math.abs(tx.amt);
   });
-  const accounts = Object.entries(acctMap).map(([name, v]) => ({ name, ...v, net: v.in - v.out })).sort((a, b) => b.out - a.out);
+  const totalIn  = inAcct.filter(tx => tx.amt > 0).reduce((s, tx) => s + tx.amt, 0);
+  const totalOut = inAcct.filter(tx => tx.amt < 0).reduce((s, tx) => s + Math.abs(tx.amt), 0);
 
-  const PERIOD_LABELS: Record<AcctPeriod, string> = {
-    week: pt ? 'Semana' : 'Week',
-    month: pt ? 'Mês' : 'Month',
-    '3months': pt ? '3 meses' : '3 months',
-    year: pt ? 'Ano' : 'Year',
-    all: pt ? 'Tudo' : 'All',
-  };
+  const periodLabel = viewMode === 'month' && selMonth
+    ? new Date(selMonth + '-15').toLocaleDateString(pt ? 'pt-BR' : 'en-US', { month: 'long', year: 'numeric' })
+    : viewMode === 'year' && selYear ? selYear
+    : pt ? 'Todos' : 'All';
+
+  const hasFilters = !!(selAcct !== 'all' || dirFilter !== 'all' || selCat || selType || search);
+  const clearAll = () => { setSelAcct('all'); setDirFilter('all'); setSelCat(''); setSelType(''); setSearch(''); };
+
+  if (!baseTxns.length) return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">{t.nav_accounts}</h1>
+          <div className="page-sub">{pt ? 'Sem extratos de conta corrente importados' : 'No bank account statements imported'}</div>
+        </div>
+        <button className="btn sm" onClick={() => (window as any).__navigate?.('import')}>
+          <Icon name="upload" className="btn-icon" />{pt ? 'Importar extrato' : 'Import statement'}
+        </button>
+      </div>
+      <EmptyState icon="bank"
+        title={pt ? 'Nenhuma conta ainda' : 'No accounts yet'}
+        sub={pt ? 'Importe um extrato bancário (C6, OFX…) para ver suas transações aqui. Gastos de cartão de crédito ficam na página Cartões.' : 'Import a bank statement (C6, OFX…) to see transactions here. Credit card purchases are on the Cards page.'}
+        cta={pt ? 'Importar extrato' : 'Import statement'}
+        onCta={() => (window as any).__navigate?.('import')}
+      />
+    </div>
+  );
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">{t.nav_accounts}</h1>
-          <div className="page-sub">
-            {displayTxns.length} {pt ? "transações" : "transactions"} · {pt ? "período:" : "period:"} {PERIOD_LABELS[period]}
-          </div>
+          <div className="page-sub">{displayTxns.length} {pt ? 'transações' : 'transactions'} · {periodLabel}</div>
         </div>
-        <button className="btn sm" onClick={() => (window as any).__navigate?.("import")}>
-          <Icon name="upload" className="btn-icon" />{pt ? "Importar" : "Import"}
+        <button className="btn sm" onClick={() => (window as any).__navigate?.('import')}>
+          <Icon name="upload" className="btn-icon" />{pt ? 'Importar' : 'Import'}
         </button>
       </div>
 
-      {/* Period filter */}
-      <div className="seg" style={{ marginBottom: 12, fontSize: 12 }}>
-        {(Object.keys(PERIOD_LABELS) as AcctPeriod[]).map(p => (
-          <button key={p} className={period === p ? 'on' : ''} onClick={() => setPeriod(p)}>{PERIOD_LABELS[p]}</button>
-        ))}
+      {/* ── Period mode + navigation ─────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div className="seg" style={{ fontSize: 12 }}>
+          <button className={viewMode === 'month' ? 'on' : ''} onClick={() => setViewMode('month')}>{pt ? 'Mês' : 'Month'}</button>
+          <button className={viewMode === 'year'  ? 'on' : ''} onClick={() => setViewMode('year')}>{pt ? 'Ano' : 'Year'}</button>
+          <button className={viewMode === 'all'   ? 'on' : ''} onClick={() => setViewMode('all')}>{pt ? 'Tudo' : 'All'}</button>
+        </div>
+
+        {viewMode === 'month' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button className="btn ghost sm" onClick={goOlderMonth} disabled={mIdx >= allMonths.length - 1}>
+              <Icon name="chevron_left" style={{ width: 14, height: 14 }} className="" />
+            </button>
+            <select className="field" style={{ height: 28, fontSize: 12, padding: '0 8px', width: 150, cursor: 'pointer' }}
+              value={selMonth} onChange={e => setSelMonth(e.target.value)}>
+              {allMonths.map(m => (
+                <option key={m} value={m}>
+                  {new Date(m + '-15').toLocaleDateString(pt ? 'pt-BR' : 'en-US', { month: 'long', year: 'numeric' })}
+                </option>
+              ))}
+            </select>
+            <button className="btn ghost sm" onClick={goNewerMonth} disabled={mIdx <= 0}>
+              <Icon name="chevron_right" style={{ width: 14, height: 14 }} className="" />
+            </button>
+          </div>
+        )}
+
+        {viewMode === 'year' && (
+          <select className="field" style={{ height: 28, fontSize: 12, padding: '0 8px', width: 100, cursor: 'pointer' }}
+            value={selYear} onChange={e => setSelYear(e.target.value)}>
+            {allYears.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        )}
+
+        {hasFilters && (
+          <button className="btn ghost sm" onClick={clearAll} style={{ marginLeft: 'auto', fontSize: 11 }}>
+            × {pt ? 'Limpar filtros' : 'Clear filters'}
+          </button>
+        )}
       </div>
 
-      {/* Account chips */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, overflowX: 'auto', paddingBottom: 2 }}>
+      {/* ── Account chips ────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
         <button className={'btn sm' + (selAcct === 'all' ? ' primary' : '')} onClick={() => setSelAcct('all')}>
-          {pt ? 'Todas as contas' : 'All accounts'}
+          {pt ? 'Todas' : 'All'}
         </button>
-        {accounts.map(a => (
-          <button key={a.name} className={'btn sm' + (selAcct === a.name ? ' primary' : '')} onClick={() => setSelAcct(selAcct === a.name ? 'all' : a.name)} style={{ flexShrink: 0 }}>
-            {a.name}
-            {selAcct !== a.name && <span style={{ marginLeft: 5, fontSize: 10, opacity: 0.6 }}>{fmtMoney(a.out, lang, true)}</span>}
+        {allAccts.map(a => (
+          <button key={a} className={'btn sm' + (selAcct === a ? ' primary' : '')}
+            onClick={() => setSelAcct(selAcct === a ? 'all' : a)} style={{ flexShrink: 0, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {a}
           </button>
         ))}
       </div>
 
-      {/* Summary cards */}
-      {selAcct !== 'all' && acctMap[selAcct] && (
-        <div className="grid g-3" style={{ marginBottom: 14 }}>
-          <div className="card card-pad">
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Entradas' : 'Income'}</div>
-            <div className="num pos" style={{ fontSize: 18, fontWeight: 700 }}>+{fmtMoney(acctMap[selAcct].in, lang, true)}</div>
-          </div>
-          <div className="card card-pad">
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Saídas' : 'Expenses'}</div>
-            <div className="num" style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>{fmtMoney(acctMap[selAcct].out, lang, true)}</div>
-          </div>
-          <div className="card card-pad">
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Saldo período' : 'Period balance'}</div>
-            {(() => { const net = acctMap[selAcct].in - acctMap[selAcct].out; return (
-              <div className={'num' + (net >= 0 ? ' pos' : '')} style={{ fontSize: 18, fontWeight: 700 }}>
-                {net >= 0 ? '+' : ''}{fmtMoney(net, lang, true)}
-              </div>
-            ); })()}
-          </div>
+      {/* ── Secondary filters: direction + type + category ───────── */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="seg" style={{ fontSize: 12 }}>
+          <button className={dirFilter === 'all' ? 'on' : ''} onClick={() => setDirFilter('all')}>{pt ? 'Tudo' : 'All'}</button>
+          <button className={dirFilter === 'in'  ? 'on' : ''} onClick={() => setDirFilter('in')}>{pt ? 'Entradas' : 'Income'}</button>
+          <button className={dirFilter === 'out' ? 'on' : ''} onClick={() => setDirFilter('out')}>{pt ? 'Saídas' : 'Expenses'}</button>
         </div>
-      )}
 
-      {/* Transaction table */}
+        {availTypes.length > 1 && (
+          <select className="field" style={{ height: 28, fontSize: 12, padding: '0 8px', cursor: 'pointer', minWidth: 100 }}
+            value={selType} onChange={e => setSelType(e.target.value)}>
+            <option value="">{pt ? 'Tipo: Todos' : 'Type: All'}</option>
+            {availTypes.map(tp => <option key={tp} value={tp}>{tp}</option>)}
+          </select>
+        )}
+
+        {availCats.length > 1 && (
+          <select className="field" style={{ height: 28, fontSize: 12, padding: '0 8px', cursor: 'pointer', minWidth: 130 }}
+            value={selCat} onChange={e => setSelCat(e.target.value)}>
+            <option value="">{pt ? 'Categoria: Todas' : 'Category: All'}</option>
+            {availCats.map(c => <option key={c} value={c}>{I18N[lang].categories[c] ?? c}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* ── Summary KPIs ────────────────────────────────────────── */}
+      <div className="grid g-3" style={{ marginBottom: 14 }}>
+        <div className="card card-pad">
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Entradas' : 'Income'}</div>
+          <div className="num pos" style={{ fontSize: 20, fontWeight: 700 }}>+{fmtMoney(totalIn, lang, true)}</div>
+        </div>
+        <div className="card card-pad">
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Saídas' : 'Expenses'}</div>
+          <div className="num" style={{ fontSize: 20, fontWeight: 700 }}>{fmtMoney(totalOut, lang, true)}</div>
+        </div>
+        <div className="card card-pad">
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}>{pt ? 'Saldo' : 'Balance'}</div>
+          {(() => { const net = totalIn - totalOut; return (
+            <div className={'num' + (net >= 0 ? ' pos' : '')} style={{ fontSize: 20, fontWeight: 700 }}>
+              {net >= 0 ? '+' : ''}{fmtMoney(net, lang, true)}
+            </div>
+          ); })()}
+        </div>
+      </div>
+
+      {/* ── Transaction table ───────────────────────────────────── */}
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{pt ? 'Transações' : 'Transactions'}</h3>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              placeholder={pt ? 'Buscar…' : 'Search…'}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="field"
-              style={{ height: 28, fontSize: 12, padding: '0 8px', width: 140 }}
-            />
-            <button className="btn ghost sm" onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')} title={pt ? 'Inverter ordem' : 'Toggle sort'}>
+            <input placeholder={pt ? 'Buscar…' : 'Search…'} value={search}
+              onChange={e => setSearch(e.target.value)} className="field"
+              style={{ height: 28, fontSize: 12, padding: '0 8px', width: 140 }} />
+            <button className="btn ghost sm" onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}>
               <Icon name={sortDir === 'desc' ? 'arrow_down' : 'arrow_up'} className="btn-icon" />
             </button>
             <span className="chip-sm">{displayTxns.length}</span>
           </div>
         </div>
+        {displayTxns.length === 0 ? (
+          <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
+            {pt ? 'Nenhuma transação com esses filtros' : 'No transactions match these filters'}
+          </div>
+        ) : (
         <table className="t">
           <thead><tr>
-            <th>{pt ? "Data" : "Date"}</th>
-            <th>{pt ? "Descrição" : "Description"}</th>
-            <th>{pt ? "Tipo" : "Type"}</th>
-            <th>{pt ? "Categoria" : "Category"}</th>
-            {selAcct === 'all' && <th>{pt ? "Conta" : "Account"}</th>}
-            <th className="r">{pt ? "Valor" : "Amount"}</th>
+            <th>{pt ? 'Data' : 'Date'}</th>
+            <th>{pt ? 'Descrição' : 'Description'}</th>
+            <th>{pt ? 'Tipo' : 'Type'}</th>
+            <th>{pt ? 'Categoria' : 'Category'}</th>
+            {selAcct === 'all' && <th>{pt ? 'Conta' : 'Account'}</th>}
+            <th className="r">{pt ? 'Valor' : 'Amount'}</th>
           </tr></thead>
           <tbody>
             {displayTxns.map((tx, i) => {
               const pm = payMethod(tx, pt);
               return (
-                <tr key={i} style={{ cursor: "pointer", opacity: tx.exclude ? 0.45 : 1 }} onClick={() => onEditTxn?.(tx)}>
+                <tr key={i} style={{ cursor: 'pointer', opacity: tx.exclude ? 0.45 : 1 }} onClick={() => onEditTxn?.(tx)}>
                   <td className="num muted" style={{ fontSize: 11.5 }}>{fmtDate(tx.d, lang)}</td>
                   <td style={{ fontWeight: 500, textDecoration: tx.exclude ? 'line-through' : 'none' }}>{tx.merch}</td>
                   <td>
@@ -2890,14 +3042,15 @@ export function AccountsPage({ lang, onEditTxn, txns = [] }: { lang: Lang; onEdi
                     </span>
                   </td>
                   {selAcct === 'all' && <td className="muted" style={{ fontSize: 11.5 }}>{tx.acct}</td>}
-                  <td className={"r num " + (tx.amt > 0 ? "pos" : "")} style={{ fontWeight: 600 }}>
-                    {tx.amt > 0 ? "+" : ""}{fmtMoney(tx.amt, lang)}
+                  <td className={'r num ' + (tx.amt > 0 ? 'pos' : '')} style={{ fontWeight: 600 }}>
+                    {tx.amt > 0 ? '+' : ''}{fmtMoney(tx.amt, lang)}
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+        )}
       </div>
     </div>
   );
