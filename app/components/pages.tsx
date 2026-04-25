@@ -181,6 +181,37 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   const dupGroups = Object.entries(dupMap).filter(([, ids]) => ids.length > 1);
   const dupTxns = dupGroups.flatMap(([, ids]) => ids.slice(1).map(id => effective.find(t => t.id === id)!).filter(Boolean));
 
+  // Future installments: group all installment txns by merchant+card+total, compute remaining months
+  const instGroups: Record<string, { merch: string; acct: string; amt: number; current: number; total: number; lastDate: string }> = {};
+  effective.forEach(tx => {
+    if (!tx.installment) return;
+    const m = tx.installment.match(/^(\d+)\/(\d+)$/);
+    if (!m) return;
+    const cur = parseInt(m[1], 10), tot = parseInt(m[2], 10);
+    const key = `${tx.merch.toLowerCase().replace(/[^a-z0-9]/g, '')}|${tx.acct}|${tot}`;
+    const ex = instGroups[key];
+    if (!ex || cur > ex.current) {
+      instGroups[key] = { merch: tx.merch, acct: tx.acct, amt: Math.abs(tx.amt), current: cur, total: tot, lastDate: tx.d };
+    }
+  });
+  // Build futureMap: YYYY-MM → acct → total
+  const futureMap: Record<string, Record<string, number>> = {};
+  Object.values(instGroups).forEach(g => {
+    const remaining = g.total - g.current;
+    if (remaining <= 0) return;
+    const [lastY, lastM] = g.lastDate.slice(0, 7).split('-').map(Number);
+    for (let i = 1; i <= remaining; i++) {
+      let mo = lastM + i, yr = lastY;
+      while (mo > 12) { mo -= 12; yr++; }
+      const ym = `${yr}-${String(mo).padStart(2, '0')}`;
+      if (!futureMap[ym]) futureMap[ym] = {};
+      futureMap[ym][g.acct] = (futureMap[ym][g.acct] ?? 0) + g.amt;
+    }
+  });
+  const futureMonths = Object.keys(futureMap).sort();
+  // Cards that appear in future installments
+  const futureAccts = [...new Set(futureMonths.flatMap(ym => Object.keys(futureMap[ym])))].sort();
+
   // Month navigation
   const mIdx = months.indexOf(selMonth);
   const goOlder = () => { if (!selMonth) setSelMonth(months[0]); else if (mIdx < months.length - 1) setSelMonth(months[mIdx + 1]); };
@@ -373,6 +404,48 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
           <div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{filtered.filter(tx => tx.amt < 0).length}</div>
         </div>
       </div>
+
+      {/* ── Future installments table ───────────────────────────────── */}
+      {futureMonths.length > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="card-head">
+            <h3 className="card-title">{pt ? 'Parcelas futuras' : 'Future installments'}</h3>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{pt ? 'Estimativa por fatura' : 'Estimated per statement'}</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>{pt ? 'Mês' : 'Month'}</th>
+                  {futureAccts.map(a => <th key={a} className="r" style={{ fontSize: 11, maxWidth: 120 }}>{a}</th>)}
+                  {futureAccts.length > 1 && <th className="r">{pt ? 'Total' : 'Total'}</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {futureMonths.map(ym => {
+                  const row = futureMap[ym];
+                  const total = Object.values(row).reduce((s, v) => s + v, 0);
+                  return (
+                    <tr key={ym}>
+                      <td style={{ fontWeight: 500 }}>
+                        {new Date(ym + '-15').toLocaleDateString(pt ? 'pt-BR' : 'en-US', { month: 'short', year: 'numeric' })}
+                      </td>
+                      {futureAccts.map(a => (
+                        <td key={a} className="r" style={{ fontSize: 13 }}>
+                          {row[a] ? <span className="num">{fmtMoney(-row[a], lang)}</span> : <span style={{ color: 'var(--ink-4)' }}>—</span>}
+                        </td>
+                      ))}
+                      {futureAccts.length > 1 && (
+                        <td className="r num" style={{ fontWeight: 700 }}>{fmtMoney(-total, lang)}</td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Category breakdown — DonutChart + interactive legend ───── */}
       {catBreakdown.length > 0 && (
@@ -781,7 +854,7 @@ function parseBRLNum(s: string): number {
 }
 
 /* ── Format detection ───────────────────────────────────────────── */
-type CsvFormat = 'c6' | 'c6fatura' | 'c6paste' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'generic' | 'numbers';
+type CsvFormat = 'c6' | 'c6fatura' | 'c6paste' | 'nubank' | 'inter' | 'bradesco' | 'ofx' | 'btg' | 'generic' | 'numbers';
 
 function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep: string; headerIdx: number } {
   // Apple Numbers / ZIP format (binary) — cannot parse as CSV
@@ -794,6 +867,17 @@ function detectFormat(content: string, filename: string): { fmt: CsvFormat; sep:
   // OFX
   if (fn.endsWith('.ofx') || fn.endsWith('.qfx') || headSample.includes('<ofx>') || headSample.includes('<stmttrn>')) {
     return { fmt: 'ofx', sep: ',', headerIdx: 0 };
+  }
+
+  // BTG Pactual fatura — detect by filename or "fatura cart" in first lines
+  if (fn.includes('btg') || headSample.includes('fatura cart')) {
+    const n2 = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+    const btgHdrIdx = lines.findIndex(l => {
+      if (!l.includes(';')) return false;
+      const cols = splitLine(l, ';').map(c => n2(c));
+      return cols.some(c => c === 'data') && cols.some(c => c.includes('tipodecompra'));
+    });
+    if (btgHdrIdx >= 0) return { fmt: 'btg', sep: ';', headerIdx: btgHdrIdx };
   }
 
   // Find the actual header row: scan up to 15 lines for one with CSV separators + known keywords
@@ -1207,12 +1291,92 @@ function parseC6AppText(text: string, acct = 'C6 Bank'): Txn[] {
   return results.sort((a, b) => b.d.localeCompare(a.d));
 }
 
+/* ── BTG Pactual fatura CSV parser ───────────────────────────────── */
+function parseBTGCSV(content: string, acct = 'BTG Pactual', sep = ';', hIdx = -1): Txn[] {
+  const lines = cleanLines(content);
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  const MONTHS_PT: Record<string, number> = {
+    janeiro: 1, fevereiro: 2, marco: 3, abril: 4, maio: 5, junho: 6,
+    julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12,
+  };
+
+  // Extract statement month+year from header (e.g. "Abril/2026")
+  let stmtYear = new Date().getFullYear();
+  let stmtMonth = new Date().getMonth() + 1;
+  for (const l of lines.slice(0, 20)) {
+    const m = l.match(/([A-Za-zÀ-ÿ]+)\/(\d{4})/);
+    if (m) {
+      const key = norm(m[1]);
+      const yr = parseInt(m[2], 10);
+      const mo = MONTHS_PT[key];
+      if (mo && yr > 2000) { stmtYear = yr; stmtMonth = mo; break; }
+    }
+  }
+
+  // Find header row: has 'data' and 'tipodecompra' columns
+  const headerIdx = hIdx >= 0 ? hIdx : lines.findIndex(l => {
+    if (!l.includes(sep)) return false;
+    const cols = splitLine(l, sep).map(c => norm(c));
+    return cols.some(c => c === 'data') && cols.some(c => c.includes('tipodecompra'));
+  });
+  if (headerIdx < 0) return [];
+
+  const headerCols = splitLine(lines[headerIdx], sep).map(c => norm(c));
+  const iDate = headerCols.findIndex(c => c === 'data');
+  const iDesc = headerCols.findIndex(c => c.includes('descri'));
+  const iVal  = headerCols.findIndex(c => c === 'valor');
+  const iTipo = headerCols.findIndex(c => c.includes('tipode'));
+  const iCard = headerCols.length - 1; // Final Cartão is last column
+
+  const txns: Txn[] = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || /^;+$/.test(line.trim())) continue;
+    const cols = splitLine(line, sep);
+
+    const dateStr = (cols[iDate >= 0 ? iDate : 1] ?? '').trim();
+    const dateParts = dateStr.split('/');
+    if (dateParts.length !== 2) continue;
+    const day = dateParts[0].padStart(2, '0');
+    const mon = dateParts[1].padStart(2, '0');
+    const txMon = parseInt(mon, 10);
+    if (isNaN(txMon) || txMon < 1 || txMon > 12) continue;
+    // Txn months past the statement month belong to the previous year
+    const yr = txMon > stmtMonth + 1 ? stmtYear - 1 : stmtYear;
+    const d = `${yr}-${mon}-${day}`;
+
+    const rawDesc    = (cols[iDesc >= 0 ? iDesc : 2] ?? '').trim();
+    const rawVal     = (cols[iVal >= 0 ? iVal : 4] ?? '').trim();
+    const tipoCompra = (cols[iTipo >= 0 ? iTipo : 5] ?? '').trim().toLowerCase();
+    const cardNum    = (cols[iCard] ?? '').trim();
+
+    // Strip R$ / RR$ prefix (the double-R appears in some encodings)
+    const amtStr = rawVal.replace(/^R+\$\s*/i, '').replace(/\s/g, '');
+    const rawAmt = parseBRLNum(amtStr);
+    if (isNaN(rawAmt) || rawAmt <= 0) continue; // skip payments and zeros
+    const amt = -rawAmt; // card expenses are negative in our system
+
+    const { merch, installment } = extractInstallment(rawDesc);
+    const isInstallment = installment !== null || tipoCompra.includes('parcela');
+
+    const cardAcct = cardNum ? `${acct} *${cardNum}` : acct;
+    const { cat, sub } = catFor(merch || rawDesc, amt);
+
+    txns.push({
+      id: newId(), d, merch: merch || rawDesc, cat, sub, acct: cardAcct, amt,
+      installment: isInstallment ? (installment ?? undefined) : undefined,
+      kind: 'card',
+    });
+  }
+  return txns.sort((a, b) => b.d.localeCompare(a.d));
+}
+
 /* ── Route file to parser ────────────────────────────────────────── */
 function parseFile(content: string, filename: string, acct?: string): { txns: Txn[]; fmt: CsvFormat; rawHeader: string } {
   const { fmt, sep, headerIdx } = detectFormat(content, filename);
   const lines = cleanLines(content);
   const rawHeader = lines[headerIdx] ?? lines[0] ?? '';
-  const nameMap: Partial<Record<CsvFormat, string>> = { c6: 'C6 Bank', c6fatura: 'C6 Bank', nubank: 'Nubank' };
+  const nameMap: Partial<Record<CsvFormat, string>> = { c6: 'C6 Bank', c6fatura: 'C6 Bank', nubank: 'Nubank', btg: 'BTG Pactual' };
   const name = acct || nameMap[fmt] || 'Importado';
   let txns: Txn[];
   if (fmt === 'numbers') txns = [];
@@ -1220,6 +1384,7 @@ function parseFile(content: string, filename: string, acct?: string): { txns: Tx
   else if (fmt === 'ofx') txns = parseOFX(content, name);
   else if (fmt === 'c6') txns = parseC6CSV(content, name, sep, headerIdx);
   else if (fmt === 'c6fatura') txns = parseC6FaturaCSV(content, name, sep, headerIdx);
+  else if (fmt === 'btg') txns = parseBTGCSV(content, name, sep, headerIdx);
   else txns = parseGenericCSV(content, name, sep);
   return { txns, fmt, rawHeader };
 }
@@ -1336,7 +1501,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAcct
           const fmtLabel: Record<CsvFormat, string> = {
             c6: 'C6 Bank Extrato CSV', c6fatura: 'C6 Bank Fatura CSV', c6paste: pt ? 'C6 Texto colado' : 'C6 Pasted text',
             nubank: 'Nubank CSV', inter: 'Banco Inter CSV', bradesco: 'Bradesco CSV',
-            ofx: 'OFX/QFX', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
+            ofx: 'OFX/QFX', btg: 'BTG Pactual Fatura CSV', generic: pt ? 'CSV Genérico' : 'Generic CSV', numbers: 'Apple Numbers',
           };
           // Debug details always included
           const normFn = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
@@ -1456,7 +1621,7 @@ export function ImportPage({ lang, onImportComplete, onDeleteBatch, existingAcct
     if (pipeStep !== 4) return;
     setPipeStep(5);
     const count = parsedTxns.length;
-    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', c6fatura: 'C6 Fatura', c6paste: pt ? 'C6 Texto colado' : 'C6 Pasted', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', generic: pt ? 'Genérico' : 'Generic', numbers: 'Numbers' };
+    const fmtLabels: Record<CsvFormat, string> = { c6: 'C6 Bank', c6fatura: 'C6 Fatura', c6paste: pt ? 'C6 Texto colado' : 'C6 Pasted', nubank: 'Nubank', inter: 'Inter', bradesco: 'Bradesco', ofx: 'OFX', btg: 'BTG Pactual', generic: pt ? 'Genérico' : 'Generic', numbers: 'Numbers' };
     setTimeout(() => {
       setLogs(prev => [...prev, ...(pt
         ? [`Mesclando ${count} transações...`, `✓ Banco de dados local atualizado`, `✓ Concluído`]

@@ -895,58 +895,66 @@ function fmtProjectionMonth(offset: number, lang: Lang): string {
 
 export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
   const pt = lang === "pt";
+  const [localConfirmed, setLocalConfirmed] = useState<Set<string>>(new Set());
 
-  // Confirmed recurring: txns with recurring=true, group by merchant, compute avg monthly amount
-  const confirmedGroups: Record<string, { merch: string; cat: string; sub: string; acct: string; avgAmt: number; confirmed: true }> = {};
-  txns.filter(t => t.recurring && t.amt < 0).forEach(t => {
-    const k = t.merch.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (!confirmedGroups[k]) {
-      confirmedGroups[k] = { merch: t.merch, cat: t.cat, sub: t.sub ?? "", acct: t.acct, avgAmt: 0, confirmed: true };
-    }
+  const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  const handleConfirm = (merch: string) => {
+    (window as any).__markRecurring?.(merch);
+    setLocalConfirmed(prev => new Set([...prev, normKey(merch)]));
+  };
+
+  // Confirmed: txns with recurring=true OR locally confirmed this session
+  const confirmedGroups: Record<string, { merch: string; cat: string; sub: string; acct: string; avgAmt: number }> = {};
+  txns.filter(t => t.amt < 0 && (t.recurring || localConfirmed.has(normKey(t.merch)))).forEach(t => {
+    const k = normKey(t.merch);
+    if (!confirmedGroups[k]) confirmedGroups[k] = { merch: t.merch, cat: t.cat, sub: t.sub ?? "", acct: t.acct, avgAmt: 0 };
   });
-  // Average amounts from all txns of each group
   Object.keys(confirmedGroups).forEach(k => {
-    const matching = txns.filter(t => t.recurring && t.merch.toLowerCase().replace(/[^a-z0-9]/g, "") === k && t.amt < 0);
+    const matching = txns.filter(t => t.amt < 0 && (t.recurring || localConfirmed.has(k)) && normKey(t.merch) === k);
     if (matching.length) confirmedGroups[k].avgAmt = matching.reduce((s, t) => s + Math.abs(t.amt), 0) / matching.length;
   });
 
-  // Unconfirmed recurring: same detection logic as RecurringPage, excludes already-confirmed
-  const unconfirmedItems: Array<{ merch: string; cat: string; sub: string; acct: string; avgAmt: number; confirmed: false }> = [];
+  // Unconfirmed: auto-detected candidates not yet confirmed
+  const detectedUnconfirmed: Array<{ merch: string; cat: string; sub: string; acct: string; avgAmt: number }> = [];
   const groupsRaw: Record<string, Txn[]> = {};
-  txns.filter(t => t.cat !== "transfer" && t.amt < 0 && !t.recurring).forEach(t => {
-    const k = t.merch.toLowerCase().replace(/[^a-z0-9]/g, "");
+  txns.filter(t => t.cat !== "transfer" && t.amt < 0 && !t.recurring && !localConfirmed.has(normKey(t.merch))).forEach(t => {
+    const k = normKey(t.merch);
     if (!groupsRaw[k]) groupsRaw[k] = [];
     groupsRaw[k].push(t);
   });
-  Object.entries(groupsRaw).forEach(([, txList]) => {
+  Object.entries(groupsRaw).forEach(([k, txList]) => {
     if (txList.length < 2) return;
-    const months = new Set(txList.map(t => t.d.slice(0, 7)));
-    if (months.size < 2) return;
+    const mos = new Set(txList.map(t => t.d.slice(0, 7)));
+    if (mos.size < 2) return;
     const amts = txList.map(t => Math.abs(t.amt));
     const avg = amts.reduce((s, a) => s + a, 0) / amts.length;
     if (Math.max(...amts.map(a => Math.abs(a - avg) / avg)) > 0.15) return;
+    if (confirmedGroups[k]) return; // already confirmed
     const latest = [...txList].sort((a, b) => b.d.localeCompare(a.d))[0];
-    unconfirmedItems.push({ merch: latest.merch, cat: latest.cat, sub: latest.sub ?? "", acct: latest.acct, avgAmt: avg, confirmed: false });
+    detectedUnconfirmed.push({ merch: latest.merch, cat: latest.cat, sub: latest.sub ?? "", acct: latest.acct, avgAmt: avg });
   });
 
   const confirmedList = Object.values(confirmedGroups).sort((a, b) => b.avgAmt - a.avgAmt);
-  const allItems = [...confirmedList, ...unconfirmedItems];
 
-  // Also estimate income from recurring confirmed income txns
-  const incomeGroups: Record<string, { merch: string; avgAmt: number }> = {};
+  // Income from confirmed recurring
+  const incomeGroups: Record<string, { avgAmt: number }> = {};
   txns.filter(t => t.recurring && t.amt > 0).forEach(t => {
-    const k = t.merch.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (!incomeGroups[k]) incomeGroups[k] = { merch: t.merch, avgAmt: 0 };
+    const k = normKey(t.merch);
+    if (!incomeGroups[k]) incomeGroups[k] = { avgAmt: 0 };
   });
   Object.keys(incomeGroups).forEach(k => {
-    const matching = txns.filter(t => t.recurring && t.amt > 0 && t.merch.toLowerCase().replace(/[^a-z0-9]/g, "") === k);
+    const matching = txns.filter(t => t.recurring && t.amt > 0 && normKey(t.merch) === k);
     if (matching.length) incomeGroups[k].avgAmt = matching.reduce((s, t) => s + t.amt, 0) / matching.length;
   });
   const confirmedIncome = Object.values(incomeGroups).reduce((s, g) => s + g.avgAmt, 0);
   const projectedExpense = confirmedList.reduce((s, i) => s + i.avgAmt, 0);
   const projectedNet = confirmedIncome - projectedExpense;
 
-  const months6 = [1, 2, 3, 4, 5, 6];
+  const allItems = [
+    ...confirmedList.map(i => ({ ...i, confirmed: true as const })),
+    ...detectedUnconfirmed.map(i => ({ ...i, confirmed: false as const })),
+  ];
 
   if (allItems.length === 0 && confirmedIncome === 0) {
     return (
@@ -964,8 +972,8 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
           </div>
           <div style={{ fontSize: 13, color: "var(--ink-3)", maxWidth: 360, lineHeight: 1.65 }}>
             {pt
-              ? "Confirme recorrentes na página de Recorrentes & Parcelas para ativar a projeção. Itens com o mesmo estabelecimento em 2+ meses são detectados automaticamente."
-              : "Confirm recurring items on the Recurring & Installments page to enable projections. Items with the same merchant in 2+ months are auto-detected."}
+              ? "Confirme recorrentes na página de Recorrentes & Parcelas ou diretamente aqui. Itens com o mesmo estabelecimento em 2+ meses são detectados automaticamente."
+              : "Confirm recurring items here or on the Recurring page. Items with the same merchant in 2+ months are auto-detected."}
           </div>
           <button className="btn sm" style={{ marginTop: 20 }} onClick={() => (window as any).__navigate?.("recurring")}>
             {pt ? "Ir para Recorrentes" : "Go to Recurring"}
@@ -981,7 +989,7 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
         <div>
           <h1 className="page-title">{I18N[lang].nav_projection}</h1>
           <p className="page-sub">
-            {confirmedList.length} {pt ? "confirmado(s)" : "confirmed"} · {unconfirmedItems.length} {pt ? "sugerido(s)" : "suggested"}
+            {confirmedList.length} {pt ? "confirmado(s)" : "confirmed"} · {detectedUnconfirmed.length} {pt ? "sugerido(s)" : "suggested"}
           </p>
         </div>
         <button className="btn ghost sm" onClick={() => (window as any).__navigate?.("recurring")}>
@@ -989,7 +997,7 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
         </button>
       </div>
 
-      {/* Monthly projection summary */}
+      {/* Monthly projection summary — updates live as items are confirmed */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
         {[
           { l: pt ? "Receita mensal" : "Monthly income", v: confirmedIncome, pos: true },
@@ -1005,7 +1013,7 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
         ))}
       </div>
 
-      {/* 6-month forward projection grid */}
+      {/* 6-month forward table */}
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-head">
           <h3 className="card-title">{pt ? "Próximos 6 meses" : "Next 6 months"}</h3>
@@ -1019,7 +1027,7 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
               <th className="r">{pt ? "Saldo" : "Net"}</th>
             </tr></thead>
             <tbody>
-              {months6.map(offset => {
+              {[1, 2, 3, 4, 5, 6].map(offset => {
                 const net = confirmedIncome - projectedExpense;
                 return (
                   <tr key={offset}>
@@ -1037,32 +1045,37 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
         </div>
       </div>
 
-      {/* Items breakdown */}
+      {/* Items breakdown with inline confirm for unconfirmed */}
       <div className="card">
         <div className="card-head">
           <h3 className="card-title">{pt ? "Composição mensal" : "Monthly breakdown"}</h3>
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            {pt ? "● confirmado  ○ sugerido (precisa confirmar)" : "● confirmed  ○ suggested (needs confirmation)"}
+            {pt ? "● confirmado  ○ sugerido" : "● confirmed  ○ suggested"}
           </span>
         </div>
         {allItems.map((item, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: i < allItems.length - 1 ? "1px solid var(--border)" : "none", opacity: item.confirmed ? 1 : 0.65 }}>
-            <span style={{ fontSize: 11, flexShrink: 0 }}>{item.confirmed ? "●" : "○"}</span>
+          <div key={item.merch + i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: i < allItems.length - 1 ? "1px solid var(--border)" : "none", opacity: item.confirmed ? 1 : 0.7 }}>
+            <span style={{ fontSize: 11, flexShrink: 0, color: item.confirmed ? "var(--green)" : "var(--ink-3)" }}>{item.confirmed ? "●" : "○"}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 1 }}>
                 {item.acct} · {item.sub || item.cat}
-                {!item.confirmed && (
-                  <button className="btn ghost sm" style={{ marginLeft: 8, fontSize: 10, padding: "1px 6px", opacity: 0.8 }}
-                    onClick={() => (window as any).__navigate?.("recurring")}>
-                    {pt ? "confirmar →" : "confirm →"}
-                  </button>
-                )}
               </div>
             </div>
-            <div className="num" style={{ fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
-              {fmtMoney(-item.avgAmt, lang)}
-              <span style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-3)", marginLeft: 3 }}>/mês</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              {!item.confirmed && (
+                <button
+                  className="btn sm"
+                  style={{ fontSize: 11, padding: "3px 10px" }}
+                  onClick={() => handleConfirm(item.merch)}
+                >
+                  {pt ? "Confirmar" : "Confirm"}
+                </button>
+              )}
+              <div className="num" style={{ fontWeight: 700, fontSize: 13 }}>
+                {fmtMoney(-item.avgAmt, lang)}
+                <span style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-3)", marginLeft: 3 }}>/mês</span>
+              </div>
             </div>
           </div>
         ))}
