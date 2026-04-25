@@ -113,6 +113,7 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   const [selCat, setSelCat] = useState('');
   const [editDueAcct, setEditDueAcct] = useState<string | null>(null);
   const [dueInputVal, setDueInputVal] = useState('');
+  const [selBank, setSelBank] = useState('');
   // Collapsible sections
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggleSection = (key: string) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
@@ -139,10 +140,15 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   );
 
   const allAccts = [...new Set(effective.map(tx => tx.acct))].sort();
+  const bankOf = (acct: string) => { const i = acct.indexOf('*'); return i > 0 ? acct.slice(0, i).trim() : acct; };
+  const allBanks = [...new Set(allAccts.map(bankOf))].sort();
+  const showBankFilter = allBanks.length > 1 || allAccts.some(a => allAccts.filter(b => bankOf(b) === bankOf(a)).length > 1);
+  const visibleAccts = selBank ? allAccts.filter(a => bankOf(a) === selBank) : allAccts;
 
   // Filter pipeline
   const inMonth = selMonth ? effective.filter(tx => tx.d.startsWith(selMonth)) : effective;
-  const inAcct  = selAcct === 'all' ? inMonth : inMonth.filter(tx => tx.acct === selAcct);
+  const inBank  = selBank ? inMonth.filter(tx => visibleAccts.includes(tx.acct)) : inMonth;
+  const inAcct  = selAcct === 'all' ? inBank : inBank.filter(tx => tx.acct === selAcct);
   // Category breakdown uses inAcct (stable — doesn't shrink when selCat is active)
   const byCat: Record<string, number> = {};
   inAcct.filter(tx => tx.amt < 0 && tx.cat !== 'transfer').forEach(tx => {
@@ -163,8 +169,8 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   );
 
   // Per-account totals — excluded txns and excluded-reimb not counted
-  const acctSummary = allAccts.map(name => {
-    const rows = inMonth.filter(tx => tx.acct === name);
+  const acctSummary = visibleAccts.map(name => {
+    const rows = inBank.filter(tx => tx.acct === name);
     const expense = rows.filter(tx => tx.amt < 0 && !tx.exclude).reduce((s, tx) => s + Math.abs(tx.amt), 0);
     const refunds = rows.filter(tx => tx.amt > 0 && tx.cat !== 'transfer' && !tx.excludeReimb).reduce((s, tx) => s + tx.amt, 0);
     return { name, expense, refunds, count: rows.filter(tx => tx.amt < 0 && !tx.exclude).length };
@@ -274,8 +280,8 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
   const olderDisabled = selMonth ? mIdx >= months.length - 1 : false;
   const newerDisabled = !selMonth;
 
-  const clearFilters = () => { setSearch(''); setSelAcct('all'); setSelMonth(''); setSelCat(''); };
-  const hasFilters = !!(search || selAcct !== 'all' || selMonth || selCat);
+  const clearFilters = () => { setSearch(''); setSelAcct('all'); setSelMonth(''); setSelCat(''); setSelBank(''); };
+  const hasFilters = !!(search || selAcct !== 'all' || selMonth || selCat || selBank);
 
   return (
     <div className="page">
@@ -335,6 +341,35 @@ export function CardsPage({ lang, txns = [], cardMeta = {}, onUpdateCardMeta }: 
           </button>
         </div>
       </div>
+
+      {/* ── Bank filter chips (only when multiple banks or one bank has multiple cards) */}
+      {showBankFilter && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
+          <button
+            className={"btn sm" + (selBank === '' ? ' primary' : '')}
+            style={{ flexShrink: 0, fontSize: 11 }}
+            onClick={() => { setSelBank(''); setSelAcct('all'); }}
+          >
+            {pt ? 'Todos os bancos' : 'All banks'}
+          </button>
+          {allBanks.map(bank => {
+            const bankAccts = allAccts.filter(a => bankOf(a) === bank);
+            return (
+              <button
+                key={bank}
+                className={"btn sm" + (selBank === bank ? ' primary' : '')}
+                style={{ flexShrink: 0, fontSize: 11 }}
+                onClick={() => { setSelBank(bank === selBank ? '' : bank); setSelAcct('all'); }}
+              >
+                {bank}
+                {bankAccts.length > 1 && (
+                  <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.7 }}>×{bankAccts.length}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Card chips ─────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, overflowX: 'auto', paddingBottom: 4 }}>
@@ -3062,6 +3097,9 @@ interface CatConfig {
   subcats: Record<string, string[]>;
   custom: string[];
   colors: Record<string, string>;
+  order?: string[];
+  hidden?: string[];
+  hiddenSubs?: Record<string, string[]>;
 }
 const EMPTY_CAT_CONFIG: CatConfig = { labels: {}, subcats: {}, custom: [], colors: {} };
 function loadCatConfig(): CatConfig {
@@ -3080,6 +3118,8 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
   const [newSubVal, setNewSubVal] = useState("");
   const [showNewCat, setShowNewCat] = useState(false);
   const [newCatLabel, setNewCatLabel] = useState("");
+  const [pendingDeleteCat, setPendingDeleteCat] = useState<string | null>(null);
+  const [pendingDeleteSub, setPendingDeleteSub] = useState<{ cat: string; sub: string } | null>(null);
   const catInputRef = useRef<HTMLInputElement>(null);
   const subInputRef = useRef<HTMLInputElement>(null);
   const newSubInputRef = useRef<HTMLInputElement>(null);
@@ -3096,7 +3136,13 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
   };
 
   const builtinKeys = Object.keys(I18N[lang].categories);
-  const allCatKeys = [...new Set([...builtinKeys, ...config.custom, ...txns.map(t => t.cat)])].filter(Boolean);
+  const hiddenSet = new Set(config.hidden ?? []);
+  const rawCatKeys = [...new Set([...builtinKeys, ...config.custom, ...txns.map(t => t.cat)])].filter(k => Boolean(k) && !hiddenSet.has(k));
+  const allCatKeys = (() => {
+    if (!config.order?.length) return rawCatKeys;
+    const orderMap = new Map((config.order).map((k, i) => [k, i]));
+    return [...rawCatKeys].sort((a, b) => (orderMap.get(a) ?? 9999) - (orderMap.get(b) ?? 9999));
+  })();
 
   const catLabel = (k: string) => config.labels[k] ?? I18N[lang].categories[k] ?? k;
   const catColor = (k: string) => config.colors[k] ?? CAT_COLORS[k] ?? "var(--bg-3)";
@@ -3104,7 +3150,8 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
     const base = SUBCATS[k] ?? [];
     const cfg = config.subcats[k] ?? [];
     const fromTxns = [...new Set(txns.filter(t => t.cat === k && t.sub).map(t => t.sub!))];
-    return [...new Set([...base, ...cfg, ...fromTxns])];
+    const hiddenSubsForCat = new Set(config.hiddenSubs?.[k] ?? []);
+    return [...new Set([...base, ...cfg, ...fromTxns])].filter(s => !hiddenSubsForCat.has(s));
   };
 
   // spending this month per cat and sub
@@ -3177,6 +3224,43 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
     setExpanded(prev => new Set([...prev, key]));
   };
 
+  const moveCategory = (key: string, dir: -1 | 1) => {
+    const idx = allCatKeys.indexOf(key);
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= allCatKeys.length) return;
+    const newOrder = [...allCatKeys];
+    [newOrder[idx], newOrder[newIdx]] = [newOrder[newIdx], newOrder[idx]];
+    updateConfig(c => ({ ...c, order: newOrder }));
+  };
+
+  const deleteCategory = (key: string, force = false) => {
+    const hasTxns = txns.some(t => t.cat === key);
+    if (hasTxns && !force) { setPendingDeleteCat(key); return; }
+    setPendingDeleteCat(null);
+    updateConfig(c => ({
+      ...c,
+      custom: c.custom.filter(k => k !== key),
+      hidden: [...(c.hidden ?? []), key],
+      labels: Object.fromEntries(Object.entries(c.labels).filter(([k]) => k !== key)),
+      subcats: Object.fromEntries(Object.entries(c.subcats).filter(([k]) => k !== key)),
+      colors: Object.fromEntries(Object.entries(c.colors).filter(([k]) => k !== key)),
+      order: (c.order ?? []).filter(k => k !== key),
+    }));
+    (window as any).__toast?.(lang === "pt" ? "Categoria removida" : "Category removed", "success");
+  };
+
+  const deleteSub = (cat: string, sub: string, force = false) => {
+    const hasTxns = txns.some(t => t.cat === cat && t.sub === sub);
+    if (hasTxns && !force) { setPendingDeleteSub({ cat, sub }); return; }
+    setPendingDeleteSub(null);
+    updateConfig(c => ({
+      ...c,
+      subcats: { ...c.subcats, [cat]: (c.subcats[cat] ?? []).filter(s => s !== sub) },
+      hiddenSubs: { ...c.hiddenSubs, [cat]: [...(c.hiddenSubs?.[cat] ?? []), sub] },
+    }));
+    (window as any).__toast?.(lang === "pt" ? "Subcategoria removida" : "Subcategory removed", "success");
+  };
+
   const toggle = (k: string) => setExpanded(prev => {
     const next = new Set(prev);
     next.has(k) ? next.delete(k) : next.add(k);
@@ -3244,9 +3328,27 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
                     <span style={{ fontSize: 13, fontWeight: 600 }}>{catLabel(k)}</span>
                   )}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                   {spend > 0 && <span className="num" style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-1)" }}>{fmtMoney(spend, lang, true)}</span>}
                   {count > 0 && <span style={{ fontSize: 11, color: "var(--ink-3)" }}>{count} {lang === "pt" ? "txns" : "txns"}</span>}
+                  <button
+                    className="btn ghost sm"
+                    style={{ padding: "2px 4px", opacity: 0.5 }}
+                    onClick={e => { e.stopPropagation(); moveCategory(k, -1); }}
+                    title={lang === "pt" ? "Mover para cima" : "Move up"}
+                    disabled={allCatKeys.indexOf(k) === 0}
+                  >
+                    <Icon name="chevron_up" className="btn-icon" style={{ width: 12, height: 12 }} />
+                  </button>
+                  <button
+                    className="btn ghost sm"
+                    style={{ padding: "2px 4px", opacity: 0.5 }}
+                    onClick={e => { e.stopPropagation(); moveCategory(k, 1); }}
+                    title={lang === "pt" ? "Mover para baixo" : "Move down"}
+                    disabled={allCatKeys.indexOf(k) === allCatKeys.length - 1}
+                  >
+                    <Icon name="chevron_down" className="btn-icon" style={{ width: 12, height: 12 }} />
+                  </button>
                   <button
                     className="btn ghost sm"
                     style={{ padding: "2px 5px", opacity: 0.6 }}
@@ -3255,9 +3357,37 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
                   >
                     <Icon name="tag" className="btn-icon" />
                   </button>
+                  <button
+                    className="btn ghost sm"
+                    style={{ padding: "2px 5px", opacity: pendingDeleteCat === k ? 1 : 0.4, color: pendingDeleteCat === k ? "var(--neg, #ef4444)" : undefined }}
+                    onClick={e => { e.stopPropagation(); deleteCategory(k); }}
+                    title={lang === "pt" ? "Remover categoria" : "Remove category"}
+                  >
+                    <Icon name="trash" className="btn-icon" style={{ width: 12, height: 12 }} />
+                  </button>
                   <Icon name={isOpen ? "chevron_down" : "chevron_right"} className="nav-icon" style={{ width: 14, height: 14, opacity: 0.4 }} />
                 </div>
               </div>
+
+              {/* Delete confirmation warning */}
+              {pendingDeleteCat === k && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", background: "color-mix(in srgb, var(--neg, #ef4444) 10%, transparent)", borderTop: "1px solid color-mix(in srgb, var(--neg, #ef4444) 30%, transparent)" }}>
+                  <Icon name="alert" style={{ width: 14, height: 14, stroke: "var(--neg, #ef4444)", flexShrink: 0 }} className="" />
+                  <span style={{ flex: 1, fontSize: 12, color: "var(--neg, #ef4444)" }}>
+                    {lang === "pt"
+                      ? `Existem transações nessa categoria. Remover mesmo assim?`
+                      : `This category has transactions. Remove anyway?`}
+                  </span>
+                  <button className="btn sm" style={{ fontSize: 11, background: "var(--neg, #ef4444)", color: "#fff", borderColor: "var(--neg, #ef4444)" }}
+                    onClick={e => { e.stopPropagation(); deleteCategory(k, true); }}>
+                    {lang === "pt" ? "Remover" : "Remove"}
+                  </button>
+                  <button className="btn ghost sm" style={{ fontSize: 11 }}
+                    onClick={e => { e.stopPropagation(); setPendingDeleteCat(null); }}>
+                    {lang === "pt" ? "Cancelar" : "Cancel"}
+                  </button>
+                </div>
+              )}
 
               {/* Subcategory list */}
               {isOpen && (
@@ -3272,7 +3402,8 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
                     const subCount = countBySub[k]?.[sub] ?? 0;
                     const isEditingSub = editingSub?.cat === k && editingSub?.sub === sub;
                     return (
-                      <div key={sub} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px 7px 50px", borderBottom: "1px solid var(--border)" }}>
+                      <div key={sub}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px 7px 50px", borderBottom: "1px solid var(--border)" }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           {isEditingSub ? (
                             <input
@@ -3288,7 +3419,7 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
                             <span style={{ fontSize: 12, color: "var(--ink-2)" }}>{sub}</span>
                           )}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                           {subSpend > 0 && <span className="num" style={{ fontSize: 12, color: "var(--ink-2)" }}>{fmtMoney(subSpend, lang, true)}</span>}
                           {subCount > 0 && <span style={{ fontSize: 10, color: "var(--ink-4)" }}>{subCount}</span>}
                           <button
@@ -3299,7 +3430,32 @@ export function CategoriesPage({ lang, txns = [] }: { lang: Lang; txns?: Txn[] }
                           >
                             <Icon name="tag" className="btn-icon" style={{ width: 11, height: 11 }} />
                           </button>
+                          <button
+                            className="btn ghost sm"
+                            style={{ padding: "2px 4px", opacity: pendingDeleteSub?.cat === k && pendingDeleteSub?.sub === sub ? 1 : 0.35, color: pendingDeleteSub?.cat === k && pendingDeleteSub?.sub === sub ? "var(--neg, #ef4444)" : undefined }}
+                            onClick={() => deleteSub(k, sub)}
+                            title={lang === "pt" ? "Remover subcategoria" : "Remove subcategory"}
+                          >
+                            <Icon name="trash" className="btn-icon" style={{ width: 11, height: 11 }} />
+                          </button>
                         </div>
+                      </div>
+                      {pendingDeleteSub?.cat === k && pendingDeleteSub?.sub === sub && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px 6px 50px", background: "color-mix(in srgb, var(--neg, #ef4444) 10%, transparent)" }}>
+                          <Icon name="alert" style={{ width: 12, height: 12, stroke: "var(--neg, #ef4444)", flexShrink: 0 }} className="" />
+                          <span style={{ flex: 1, fontSize: 11, color: "var(--neg, #ef4444)" }}>
+                            {lang === "pt" ? `${subCount} txn(s) usam essa subcategoria.` : `${subCount} txn(s) use this subcategory.`}
+                          </span>
+                          <button className="btn sm" style={{ fontSize: 10, background: "var(--neg, #ef4444)", color: "#fff", borderColor: "var(--neg, #ef4444)", padding: "2px 8px" }}
+                            onClick={() => deleteSub(k, sub, true)}>
+                            {lang === "pt" ? "Remover" : "Remove"}
+                          </button>
+                          <button className="btn ghost sm" style={{ fontSize: 10, padding: "2px 8px" }}
+                            onClick={() => setPendingDeleteSub(null)}>
+                            {lang === "pt" ? "Cancelar" : "Cancel"}
+                          </button>
+                        </div>
+                      )}
                       </div>
                     );
                   })}

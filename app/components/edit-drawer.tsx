@@ -974,7 +974,19 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
     if (matching.length) incomeGroups[k].avgAmt = matching.reduce((s, t) => s + t.amt, 0) / matching.length;
   });
   const confirmedIncome = Object.values(incomeGroups).reduce((s, g) => s + g.avgAmt, 0);
-  const projectedExpense = confirmedList.reduce((s, i) => s + i.avgAmt, 0);
+  const recurringExpense = confirmedList.reduce((s, i) => s + i.avgAmt, 0);
+
+  // Active installments for projection
+  const activeInst = detectInstallments(txns);
+  // Per-month installment contribution (months 1–6)
+  const instByMonth = [0, 0, 0, 0, 0, 0];
+  activeInst.forEach(inst => {
+    const remaining = inst.total - inst.current;
+    for (let m = 0; m < Math.min(remaining, 6); m++) instByMonth[m] += Math.abs(inst.amt);
+  });
+  const totalInstMonth1 = instByMonth[0];
+
+  const projectedExpense = recurringExpense + totalInstMonth1;
   const projectedNet = confirmedIncome - projectedExpense;
 
   const allItems = [
@@ -982,7 +994,7 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
     ...detectedUnconfirmed.map(i => ({ ...i, confirmed: false as const })),
   ];
 
-  if (allItems.length === 0 && confirmedIncome === 0) {
+  if (allItems.length === 0 && confirmedIncome === 0 && activeInst.length === 0) {
     return (
       <div className="page">
         <div className="page-head">
@@ -1026,20 +1038,20 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
       {/* Monthly projection summary — updates live as items are confirmed */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
         {[
-          { l: pt ? "Receita mensal" : "Monthly income", v: confirmedIncome, pos: true },
-          { l: pt ? "Gastos recorrentes" : "Recurring expenses", v: projectedExpense, pos: false },
-          { l: pt ? "Saldo projetado" : "Projected net", v: projectedNet, pos: projectedNet >= 0 },
+          { l: pt ? "Receita mensal" : "Monthly income", v: confirmedIncome, neg: false },
+          { l: pt ? "Gastos (mês atual)" : "Expenses (this month)", v: projectedExpense, neg: true },
+          { l: pt ? "Saldo projetado" : "Projected net", v: projectedNet, neg: projectedNet < 0 },
         ].map((k, i) => (
           <div key={i} className="card card-pad">
             <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 4 }}>{k.l}</div>
-            <div className={"num" + (k.pos ? " pos" : "")} style={{ fontSize: 18, fontWeight: 700 }}>
-              {k.pos && k.v > 0 ? "+" : ""}{fmtMoney(k.v * (i === 1 ? -1 : 1), lang)}
+            <div className={"num" + (!k.neg && k.v > 0 ? " pos" : k.neg ? "" : "")} style={{ fontSize: 18, fontWeight: 700, color: k.neg && k.v > 0 ? "var(--neg, #ef4444)" : i === 2 ? (projectedNet >= 0 ? "var(--pos, #22c55e)" : "var(--neg, #ef4444)") : undefined }}>
+              {i === 0 && k.v > 0 ? "+" : i === 1 ? "-" : k.v >= 0 ? "+" : ""}{fmtMoney(Math.abs(k.v), lang)}
             </div>
           </div>
         ))}
       </div>
 
-      {/* 6-month forward table */}
+      {/* 6-month forward table with per-month installment amounts */}
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-head">
           <h3 className="card-title">{pt ? "Próximos 6 meses" : "Next 6 months"}</h3>
@@ -1049,17 +1061,21 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
             <thead><tr>
               <th style={{ minWidth: 140 }}>{pt ? "Mês" : "Month"}</th>
               <th className="r">{pt ? "Receita" : "Income"}</th>
-              <th className="r">{pt ? "Gastos" : "Expenses"}</th>
+              <th className="r">{pt ? "Recorrentes" : "Recurring"}</th>
+              <th className="r">{pt ? "Parcelas" : "Installments"}</th>
               <th className="r">{pt ? "Saldo" : "Net"}</th>
             </tr></thead>
             <tbody>
               {[1, 2, 3, 4, 5, 6].map(offset => {
-                const net = confirmedIncome - projectedExpense;
+                const instAmt = instByMonth[offset - 1] ?? 0;
+                const totalExp = recurringExpense + instAmt;
+                const net = confirmedIncome - totalExp;
                 return (
                   <tr key={offset}>
                     <td style={{ fontWeight: 500 }}>{fmtProjectionMonth(offset, lang)}</td>
                     <td className="r num pos">{confirmedIncome > 0 ? `+${fmtMoney(confirmedIncome, lang, true)}` : "—"}</td>
-                    <td className="r num">{projectedExpense > 0 ? fmtMoney(-projectedExpense, lang, true) : "—"}</td>
+                    <td className="r num">{recurringExpense > 0 ? fmtMoney(-recurringExpense, lang, true) : "—"}</td>
+                    <td className="r num" style={{ color: instAmt > 0 ? "var(--ink-2)" : "var(--ink-3)" }}>{instAmt > 0 ? fmtMoney(-instAmt, lang, true) : "—"}</td>
                     <td className={"r num" + (net >= 0 ? " pos" : "")} style={{ fontWeight: 600 }}>
                       {net >= 0 ? "+" : ""}{fmtMoney(net, lang, true)}
                     </td>
@@ -1071,41 +1087,86 @@ export function ProjectionPage({ lang, txns = [] }: ProjectionPageProps) {
         </div>
       </div>
 
-      {/* Items breakdown with inline confirm for unconfirmed */}
-      <div className="card">
-        <div className="card-head">
-          <h3 className="card-title">{pt ? "Composição mensal" : "Monthly breakdown"}</h3>
-          <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            {pt ? "● confirmado  ○ sugerido" : "● confirmed  ○ suggested"}
-          </span>
-        </div>
-        {allItems.map((item, i) => (
-          <div key={item.merch + i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: i < allItems.length - 1 ? "1px solid var(--border)" : "none", opacity: item.confirmed ? 1 : 0.7 }}>
-            <span style={{ fontSize: 11, flexShrink: 0, color: item.confirmed ? "var(--green)" : "var(--ink-3)" }}>{item.confirmed ? "●" : "○"}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
-              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 1 }}>
-                {item.acct} · {item.sub || item.cat}
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {!item.confirmed && (
-                <button
-                  className="btn sm"
-                  style={{ fontSize: 11, padding: "3px 10px" }}
-                  onClick={() => handleConfirm(item.merch)}
-                >
-                  {pt ? "Confirmar" : "Confirm"}
-                </button>
-              )}
-              <div className="num" style={{ fontWeight: 700, fontSize: 13 }}>
-                {fmtMoney(-item.avgAmt, lang)}
-                <span style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-3)", marginLeft: 3 }}>/mês</span>
-              </div>
-            </div>
+      {/* Recurring items breakdown */}
+      {allItems.length > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="card-head">
+            <h3 className="card-title">
+              <Icon name="refresh" style={{ width: 14, height: 14, stroke: "currentColor", marginRight: 6, verticalAlign: "middle" }} className="" />
+              {pt ? "Recorrentes" : "Recurring"}
+            </h3>
+            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+              {pt ? "● confirmado  ○ sugerido" : "● confirmed  ○ suggested"}
+            </span>
           </div>
-        ))}
-      </div>
+          {allItems.map((item, i) => (
+            <div key={item.merch + i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: i < allItems.length - 1 ? "1px solid var(--border)" : "none", opacity: item.confirmed ? 1 : 0.7 }}>
+              <span style={{ fontSize: 11, flexShrink: 0, color: item.confirmed ? "var(--pos, #22c55e)" : "var(--ink-3)" }}>{item.confirmed ? "●" : "○"}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 1 }}>
+                  {item.acct} · {item.sub || item.cat}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                {!item.confirmed && (
+                  <button
+                    className="btn sm"
+                    style={{ fontSize: 11, padding: "3px 10px" }}
+                    onClick={() => handleConfirm(item.merch)}
+                  >
+                    {pt ? "Confirmar" : "Confirm"}
+                  </button>
+                )}
+                <div className="num" style={{ fontWeight: 700, fontSize: 13 }}>
+                  {fmtMoney(-item.avgAmt, lang)}
+                  <span style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-3)", marginLeft: 3 }}>/mês</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Active installments breakdown */}
+      {activeInst.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <h3 className="card-title">
+              <Icon name="zap" style={{ width: 14, height: 14, stroke: "currentColor", marginRight: 6, verticalAlign: "middle" }} className="" />
+              {pt ? "Parcelas ativas" : "Active installments"}
+            </h3>
+            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>{activeInst.length} {pt ? "em andamento" : "ongoing"}</span>
+          </div>
+          {activeInst.map((inst, i) => {
+            const remaining = inst.total - inst.current;
+            const pct = inst.total > 0 ? (inst.current / inst.total) * 100 : 0;
+            return (
+              <div key={i} style={{ padding: "10px 16px", borderBottom: i < activeInst.length - 1 ? "1px solid var(--border)" : "none" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "var(--accent-fg)", flexShrink: 0, background: "var(--bg-3)", borderRadius: 4, padding: "1px 5px" }}>
+                    {inst.current}/{inst.total}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{inst.merch}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 1 }}>{inst.acct} · {inst.sub || inst.cat}</div>
+                  </div>
+                  <div className="num" style={{ fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+                    {fmtMoney(inst.amt, lang)}
+                    <span style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-3)", marginLeft: 3 }}>/parcela</span>
+                  </div>
+                </div>
+                <div style={{ marginTop: 6, height: 3, background: "var(--bg-3)", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent-fg)", borderRadius: 2 }} />
+                </div>
+                <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 3 }}>
+                  {remaining} {pt ? `parcela(s) restante(s)` : `remaining installment(s)`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1168,14 +1229,24 @@ function loadDismissed(): Set<string> {
 function saveDismissed(s: Set<string>) {
   try { localStorage.setItem('fp_recurring_dismissed', JSON.stringify([...s])); } catch {}
 }
+function installKey(item: { merch: string; acct: string; total: number }): string {
+  return `${item.merch.toLowerCase().replace(/[^a-z0-9]/g, '')}|${item.acct}|${item.total}`;
+}
+function loadConfirmedInst(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem('fp_confirmed_installments') ?? '[]')); } catch { return new Set(); }
+}
+function saveConfirmedInst(s: Set<string>) {
+  try { localStorage.setItem('fp_confirmed_installments', JSON.stringify([...s])); } catch {}
+}
 
 export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps) {
   const pt = lang === "pt";
   const [tab, setTab] = useState<"recurring" | "installments">("recurring");
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [showDismissed, setShowDismissed] = useState(false);
+  const [confirmedInst, setConfirmedInst] = useState<Set<string>>(new Set());
 
-  useEffect(() => { setDismissed(loadDismissed()); }, []);
+  useEffect(() => { setDismissed(loadDismissed()); setConfirmedInst(loadConfirmedInst()); }, []);
 
   const allInstallments = detectInstallments(txns);
   const allRecurring = detectRecurring(txns);
@@ -1202,6 +1273,14 @@ export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps
   function confirm(merch: string) {
     (window as any).__markRecurring?.(merch);
     (window as any).__toast?.(pt ? `✓ "${merch}" marcado como recorrente` : `✓ "${merch}" marked as recurring`);
+  }
+  function confirmInst(item: { merch: string; acct: string; total: number }) {
+    const key = installKey(item);
+    const next = new Set(confirmedInst);
+    next.add(key);
+    setConfirmedInst(next);
+    saveConfirmedInst(next);
+    (window as any).__toast?.(pt ? `✓ "${item.merch}" confirmado` : `✓ "${item.merch}" confirmed`, "success");
   }
 
   const displayRecurring = showDismissed ? dismissedRecurring : activeRecurring;
@@ -1330,30 +1409,60 @@ export function RecurringPage({ lang, txns = [], onEditTxn }: RecurringPageProps
             </div>
           </div>
         ) : (
-          <div className="card">
-            {displayInstallments.map((item, i) => {
-              const pct = item.total > 0 ? (item.current / item.total) * 100 : 0;
-              const remaining = item.total - item.current;
-              return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < displayInstallments.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
-                  onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, fontSize: 13 }}>{item.merch}</div>
-                    <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{item.acct} · {item.sub || item.cat}</div>
-                    <div style={{ marginTop: 6, height: 4, background: "var(--bg-3)", borderRadius: 2, overflow: "hidden" }}>
-                      <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent-fg)", borderRadius: 2 }} />
+          <>
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 10, lineHeight: 1.5 }}>
+              {pt
+                ? "Confirme os parcelamentos ativos e edite as transações para ajustar datas reais de cada parcela."
+                : "Confirm active installments and edit transactions to adjust the real date of each installment."}
+            </div>
+            <div className="card">
+              {displayInstallments.map((item, i) => {
+                const pct = item.total > 0 ? (item.current / item.total) * 100 : 0;
+                const remaining = item.total - item.current;
+                const key = installKey(item);
+                const isConfirmed = confirmedInst.has(key);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 16px", borderBottom: i < displayInstallments.length - 1 ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, marginTop: 5, background: isConfirmed ? "var(--pos, #22c55e)" : "var(--bg-3)", border: isConfirmed ? "none" : "1.5px solid var(--border)" }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>
+                        {item.merch}
+                        {isConfirmed && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--pos, #22c55e)", fontWeight: 600 }}>✓ {pt ? "confirmado" : "confirmed"}</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{item.acct} · {item.sub || item.cat}</div>
+                      <div style={{ marginTop: 6, height: 4, background: "var(--bg-3)", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${pct}%`, height: "100%", background: isConfirmed ? "var(--pos, #22c55e)" : "var(--accent-fg)", borderRadius: 2 }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 3 }}>
+                        {pt ? `${item.current}/${item.total} parcelas · ${remaining} restante(s)` : `${item.current}/${item.total} installments · ${remaining} remaining`}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                        {!isConfirmed && (
+                          <button
+                            className="btn sm primary"
+                            style={{ fontSize: 11, padding: "3px 10px" }}
+                            onClick={() => confirmInst(item)}
+                          >
+                            {pt ? "Confirmar" : "Confirm"}
+                          </button>
+                        )}
+                        <button
+                          className="btn ghost sm"
+                          style={{ fontSize: 11, padding: "3px 10px" }}
+                          onClick={() => { const tx = txns.find(t => t.id === item.txnId); if (tx) onEditTxn?.(tx); }}
+                        >
+                          {pt ? "Editar transação" : "Edit transaction"}
+                        </button>
+                      </div>
                     </div>
-                    <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 3 }}>
-                      {pt ? `${item.current}/${item.total} parcelas · ${remaining} restante(s)` : `${item.current}/${item.total} installments · ${remaining} remaining`}
+                    <div className="num" style={{ fontWeight: 700, fontSize: 14, flexShrink: 0, marginTop: 2 }}>
+                      {fmtMoney(item.amt, lang)}
                     </div>
                   </div>
-                  <div className="num" style={{ fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
-                    {fmtMoney(item.amt, lang)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )
       )}
     </div>
